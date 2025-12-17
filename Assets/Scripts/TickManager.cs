@@ -44,7 +44,6 @@ public class TickManager : MonoBehaviour
     {
         CurrentTick++;
 
-        // DEBUG (remove later)
-        //Debug.Log("Tick: " + CurrentTick);
+        Debug.Log("Tick: " + CurrentTick);
     }
 }

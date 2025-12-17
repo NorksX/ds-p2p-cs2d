@@ -57,7 +57,6 @@ public class PlayerController : MonoBehaviour
 
     public void SimulateShoot(Vector2 screenPos)
     {
-            Debug.Log("SimulateShoot called");
         if (cam == null)
             return;
 
