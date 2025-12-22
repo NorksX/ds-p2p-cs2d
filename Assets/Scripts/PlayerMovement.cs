@@ -12,12 +12,10 @@ public class PlayerController : MonoBehaviour
     [SerializeField] private GameObject tracerPrefab;
 
     private Rigidbody2D rb;
-    private Camera cam;
 
     private void Awake()
     {
         rb = GetComponent<Rigidbody2D>();
-        cam = Camera.main;
     }
 
     /* ================= MOVEMENT ================= */
@@ -26,7 +24,7 @@ public class PlayerController : MonoBehaviour
     {
         if (input.sqrMagnitude < 0.0001f)
         {
-            rb.linearVelocity = Vector2.zero;
+            rb.linearVelocity = Vector2.zero; // if your Unity complains, change to rb.velocity
             return;
         }
 
@@ -35,45 +33,26 @@ public class PlayerController : MonoBehaviour
 
     /* ================= LOOK ================= */
 
-    public void SimulateLookAtCursor(Vector2 screenPos)
+    public void SimulateLook(Vector2 aimDir)
     {
-        if (cam == null)
+        if (aimDir.sqrMagnitude < 0.0001f)
             return;
 
-        float zDistance = Mathf.Abs(cam.transform.position.z - transform.position.z);
-        Vector3 mouseWorld = cam.ScreenToWorldPoint(
-            new Vector3(screenPos.x, screenPos.y, zDistance)
-        );
-
-        Vector2 direction = (Vector2)(mouseWorld - transform.position);
-        if (direction.sqrMagnitude < 0.0001f)
-            return;
-
-        float angle = Mathf.Atan2(direction.y, direction.x) * Mathf.Rad2Deg;
+        float angle = Mathf.Atan2(aimDir.y, aimDir.x) * Mathf.Rad2Deg;
         transform.rotation = Quaternion.Euler(0f, 0f, angle);
     }
 
     /* ================= SHOOTING ================= */
 
-    public void SimulateShoot(Vector2 screenPos)
+    public void SimulateShoot(Vector2 aimDir)
     {
-        if (cam == null)
+        if (aimDir.sqrMagnitude < 0.0001f)
             return;
 
-        float zDistance = Mathf.Abs(cam.transform.position.z - transform.position.z);
-        Vector3 mouseWorld = cam.ScreenToWorldPoint(
-            new Vector3(screenPos.x, screenPos.y, zDistance)
-        );
-
         Vector2 origin = transform.position;
-        Vector2 direction = ((Vector2)mouseWorld - origin).normalized;
+        Vector2 direction = aimDir.normalized;
 
-        RaycastHit2D hit = Physics2D.Raycast(
-            origin,
-            direction,
-            shootRange,
-            shootMask
-        );
+        RaycastHit2D hit = Physics2D.Raycast(origin, direction, shootRange, shootMask);
 
         Vector2 endPoint = origin + direction * shootRange;
 
@@ -88,29 +67,27 @@ public class PlayerController : MonoBehaviour
             }
         }
 
-
         SpawnTracer(origin, endPoint);
     }
 
-private void SpawnTracer(Vector2 start, Vector2 end)
-{
-    GameObject tracer = Instantiate(tracerPrefab);
+    private void SpawnTracer(Vector2 start, Vector2 end)
+    {
+        if (tracerPrefab == null)
+            return;
 
-    Vector2 dir = end - start;
-    float distance = dir.magnitude;
-    Vector2 direction = dir.normalized;
+        GameObject tracer = Instantiate(tracerPrefab);
 
-    // Rotation
-    float angle = Mathf.Atan2(direction.y, direction.x) * Mathf.Rad2Deg;
-    tracer.transform.rotation = Quaternion.Euler(0f, 0f, angle);
+        Vector2 dir = end - start;
+        float distance = dir.magnitude;
+        Vector2 direction = dir.normalized;
 
-    // Scale (X = length)
-    Vector3 scale = tracer.transform.localScale;
-    scale.x = distance;
-    tracer.transform.localScale = scale;
+        float angle = Mathf.Atan2(direction.y, direction.x) * Mathf.Rad2Deg;
+        tracer.transform.rotation = Quaternion.Euler(0f, 0f, angle);
 
-    // Position offset so it STARTS at the player
-    tracer.transform.position = start + direction * (distance * 0.5f);
-}
+        Vector3 scale = tracer.transform.localScale;
+        scale.x = distance;
+        tracer.transform.localScale = scale;
 
+        tracer.transform.position = start + direction * (distance * 0.5f);
+    }
 }

@@ -1,3 +1,4 @@
+using System;
 using UnityEngine;
 
 public class TickManager : MonoBehaviour
@@ -9,6 +10,8 @@ public class TickManager : MonoBehaviour
     public int tickRate = 30;
 
     public int CurrentTick { get; private set; }
+
+    public event Action<int> OnTick; // fires every tick with the tick number
 
     private float tickInterval;
     private float accumulatedTime;
@@ -24,7 +27,7 @@ public class TickManager : MonoBehaviour
         Instance = this;
         DontDestroyOnLoad(gameObject);
 
-        tickInterval = 1f / tickRate;
+        tickInterval = 1f / Mathf.Max(1, tickRate);
         CurrentTick = 0;
         accumulatedTime = 0f;
     }
@@ -42,8 +45,9 @@ public class TickManager : MonoBehaviour
 
     private void AdvanceTick()
     {
-        CurrentTick++;
+        // Debug.Log($"Tick {CurrentTick}, listeners = {(OnTick == null ? 0 : OnTick.GetInvocationList().Length)}");
 
-        Debug.Log("Tick: " + CurrentTick);
+        CurrentTick++;
+        OnTick?.Invoke(CurrentTick);
     }
 }

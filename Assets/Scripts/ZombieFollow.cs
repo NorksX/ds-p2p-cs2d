@@ -44,7 +44,6 @@ public class ZombieFollow : MonoBehaviour
 
     private void TryAttack()
     {
-        Debug.Log("TryAttack called");
         if (Time.time - lastAttackTime < attackCooldown) return;
 
         PlayerHealth playerHealth = target.GetComponent<PlayerHealth>();

@@ -4,22 +4,49 @@ using UnityEngine.InputSystem;
 public class InputSampler : MonoBehaviour
 {
     [SerializeField] private PlayerController player;
+    [SerializeField] private LocalInputBuffer buffer;
+    [SerializeField] private Camera cam;
 
     [Header("Fire Settings")]
-    [SerializeField] private int fireCooldownTicks = 5; // 30 TPS → 6 shots/sec
+    [SerializeField] private int fireCooldownTicks = 5;
 
     private Vector2 moveInput;
-    private Vector2 aimInput;
+    private Vector2 lookScreenPos;
     private bool fireHeld;
     private bool firePressedThisFrame;
 
-    private int lastSampledTick = -1;
     private int lastFireTick = -999;
 
     private void Awake()
     {
         if (player == null)
             player = GetComponent<PlayerController>();
+
+        if (buffer == null)
+            buffer = GetComponent<LocalInputBuffer>();
+
+        if (cam == null)
+            cam = Camera.main;
+    }
+
+    // IMPORTANT: subscribe in Start, not OnEnable
+    private void Start()
+    {
+        Debug.Log("InputSampler Start()");
+
+        if (TickManager.Instance == null)
+        {
+            Debug.LogError("TickManager.Instance is NULL in InputSampler.Start()");
+            return;
+        }
+
+        TickManager.Instance.OnTick += HandleTick;
+    }
+
+    private void OnDestroy()
+    {
+        if (TickManager.Instance != null)
+            TickManager.Instance.OnTick -= HandleTick;
     }
 
     /* ================= INPUT CALLBACKS ================= */
@@ -31,46 +58,59 @@ public class InputSampler : MonoBehaviour
 
     public void OnLook(InputAction.CallbackContext context)
     {
-        aimInput = context.ReadValue<Vector2>(); // screen position
+        lookScreenPos = context.ReadValue<Vector2>();
     }
 
     public void OnFire(InputAction.CallbackContext context)
     {
-       //Debug.Log($"OnFire called - phase: {context.phase}");
-
         if (context.started)
             firePressedThisFrame = true;
 
         fireHeld = context.ReadValue<float>() > 0.5f;
     }
 
-    /* ================= TICK SAMPLING ================= */
+    /* ================= TICK ================= */
 
-    private void Update()
+    private void HandleTick(int tick)
     {
-        int tick = TickManager.Instance.CurrentTick;
-
-
-        if (tick == lastSampledTick)
+        if (buffer == null || cam == null || player == null)
             return;
 
-        lastSampledTick = tick;
+        Vector2 aimDir = ComputeAimDirWorld(player.transform.position, lookScreenPos);
 
-        // Movement + look
-        player.SimulateMovement(moveInput);
-        player.SimulateLookAtCursor(aimInput);
-
-        // Shooting
         bool canFire = tick - lastFireTick >= fireCooldownTicks;
+        bool firePressed = false;
 
         if (canFire && (firePressedThisFrame || fireHeld))
         {
-            //Debug.Log("FIRING AT TICK " + tick);
-
             lastFireTick = tick;
-            player.SimulateShoot(aimInput);
+            firePressed = true;
         }
 
+        InputCommand cmd = new InputCommand(
+            tick,
+            moveInput,
+            aimDir,
+            fireHeld,
+            firePressed
+        );
+
+        buffer.Store(cmd);
+
         firePressedThisFrame = false;
+    }
+
+    private Vector2 ComputeAimDirWorld(Vector3 playerWorldPos, Vector2 screenPos)
+    {
+        float zDistance = Mathf.Abs(cam.transform.position.z - playerWorldPos.z);
+        Vector3 mouseWorld = cam.ScreenToWorldPoint(
+            new Vector3(screenPos.x, screenPos.y, zDistance)
+        );
+
+        Vector2 dir = (Vector2)(mouseWorld - playerWorldPos);
+        if (dir.sqrMagnitude < 0.000001f)
+            return Vector2.right;
+
+        return dir.normalized;
     }
 }
