@@ -4,6 +4,7 @@ using UnityEngine;
 public struct InputCommand
 {
     public int tick;
+    public string playerId; // Network: identify which player this input is from
 
     public Vector2 move; 
     public Vector2 aimDir; 
@@ -16,9 +17,11 @@ public struct InputCommand
         Vector2 move,
         Vector2 aimDir,
         bool fireHeld,
-        bool firePressed)
+        bool firePressed,
+        string playerId = "")
     {
         this.tick = tick;
+        this.playerId = playerId;
         this.move = move;
         this.aimDir = aimDir;
         this.fireHeld = fireHeld;

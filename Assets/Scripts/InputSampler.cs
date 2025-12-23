@@ -28,11 +28,20 @@ public class InputSampler : MonoBehaviour
         if (cam == null)
             cam = Camera.main;
     }
-
+    
     // IMPORTANT: subscribe in Start, not OnEnable
     private void Start()
     {
-        Debug.Log("InputSampler Start()");
+        // Disable input sampling on remote players
+        NetworkedPlayer networkedPlayer = GetComponent<NetworkedPlayer>();
+        if (networkedPlayer != null && !networkedPlayer.isLocalPlayer)
+        {
+            Debug.Log($"[InputSampler] Disabling InputSampler on REMOTE player {networkedPlayer.playerId}");
+            this.enabled = false;
+            return;
+        }
+        
+        Debug.Log("[InputSampler] Enabled for LOCAL player");
 
         if (TickManager.Instance == null)
         {
@@ -92,7 +101,8 @@ public class InputSampler : MonoBehaviour
             moveInput,
             aimDir,
             fireHeld,
-            firePressed
+            firePressed,
+            NetworkManager.Instance != null ? NetworkManager.Instance.LocalPlayerId : ""
         );
 
         buffer.Store(cmd);
