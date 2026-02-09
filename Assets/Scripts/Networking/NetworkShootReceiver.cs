@@ -25,14 +25,13 @@ public class NetworkShootReceiver : MonoBehaviour
 
     private void HandleMessage(INetworkMessage message, NetPeer peer)
     {
-        // Log EVERY message to see if we're receiving anything
-        Debug.Log($"[NetworkShootReceiver] HandleMessage called! Type={message.GetMessageType()}");
+        // Debug.Log($"[NetworkShootReceiver] HandleMessage called! Type={message.GetMessageType()}");
         
         if (message.GetMessageType() == MessageType.ShootEvent)
         {
             ShootEventMessage shootMsg = (ShootEventMessage)message;
             
-            Debug.Log($"[NetworkShootReceiver] Received shoot event from {shootMsg.shooterId}, origin={shootMsg.origin}, aimDir={shootMsg.aimDir}");
+            // Debug.Log($"[NetworkShootReceiver] Received shoot event from {shootMsg.shooterId}, origin={shootMsg.origin}, aimDir={shootMsg.aimDir}");
             
             // Find the player who shot
             if (PlayerSpawner.Instance != null)
@@ -43,7 +42,7 @@ public class NetworkShootReceiver : MonoBehaviour
                 {
                     // Visualize the shoot on the client
                     shooter.playerController.SimulateShoot(shootMsg.aimDir);
-                    Debug.Log($"[NetworkShootReceiver] Visualized shoot from {shootMsg.shooterId}");
+                    // Debug.Log($"[NetworkShootReceiver] Visualized shoot from {shootMsg.shooterId}");
                 }
                 else
                 {

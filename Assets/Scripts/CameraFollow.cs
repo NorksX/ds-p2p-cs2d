@@ -26,7 +26,7 @@ public class CameraFollow : MonoBehaviour
     
     private void FindLocalPlayer()
     {
-        NetworkedPlayer[] players = FindObjectsOfType<NetworkedPlayer>();
+        NetworkedPlayer[] players = FindObjectsByType<NetworkedPlayer>(FindObjectsSortMode.None);
         
         foreach (var player in players)
         {

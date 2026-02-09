@@ -150,14 +150,6 @@ public class PlayerSpawner : MonoBehaviour
         // DON'T auto-spawn here! Players should only spawn when the game starts.
         // This was causing duplicate spawning: once on lobby join, once on game start.
         
-        /*
-        // Only host spawns remote players
-        if (NetworkManager.Instance.IsHost)
-        {
-            SpawnRemotePlayer(peerInfo);
-        }
-        */
-        
         Debug.Log($"[PlayerSpawner] Peer {peerInfo.username} joined lobby (will spawn when game starts)");
     }
     

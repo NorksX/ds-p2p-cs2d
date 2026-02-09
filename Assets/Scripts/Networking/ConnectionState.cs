@@ -6,5 +6,6 @@ public enum ConnectionState
     Disconnected,
     ConnectingToLobby,
     InLobby,
-    InGame
+    Connected,
+    HostMigration
 }

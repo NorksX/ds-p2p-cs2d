@@ -43,14 +43,16 @@ public class JoinLobbyResponse : INetworkMessage
     public bool accepted;
     public int assignedPlayerPosition; // 0-3
     public string reason;
+    public string hostId;
     
     public JoinLobbyResponse() { }
     
-    public JoinLobbyResponse(bool accepted, int assignedPlayerPosition, string reason = "")
+    public JoinLobbyResponse(bool accepted, int assignedPlayerPosition, string reason = "", string hostId = "")
     {
         this.accepted = accepted;
         this.assignedPlayerPosition = assignedPlayerPosition;
         this.reason = reason;
+        this.hostId = hostId;
     }
     
     public MessageType GetMessageType() => MessageType.JoinLobbyResponse;
@@ -60,6 +62,7 @@ public class JoinLobbyResponse : INetworkMessage
         writer.Write(accepted);
         writer.Write(assignedPlayerPosition);
         writer.Write(reason ?? "");
+        writer.Write(hostId ?? "");
     }
     
     public void Deserialize(BinaryReader reader)
@@ -67,6 +70,7 @@ public class JoinLobbyResponse : INetworkMessage
         accepted = reader.ReadBoolean();
         assignedPlayerPosition = reader.ReadInt32();
         reason = reader.ReadString();
+        hostId = reader.ReadString();
     }
 }
 

@@ -46,12 +46,12 @@ public class NetworkStateHost : MonoBehaviour
     
     private void HandleMessage(INetworkMessage message, NetPeer peer)
     {
-        Debug.Log($"[NetworkStateHost] HandleMessage called! MessageType={message.GetMessageType()}, IsHost={NetworkManager.Instance?.IsHost}");
+        // Debug.Log($"[NetworkStateHost] HandleMessage called! MessageType={message.GetMessageType()}, IsHost={NetworkManager.Instance?.IsHost}");
         
         // Only host processes input commands
         if (!NetworkManager.Instance.IsHost)
         {
-            Debug.Log("[NetworkStateHost] Not host, ignoring message");
+            // Debug.Log("[NetworkStateHost] Not host, ignoring message");
             return;
         }
         
@@ -60,7 +60,7 @@ public class NetworkStateHost : MonoBehaviour
             InputCommandMessage inputMsg = (InputCommandMessage)message;
             string playerId = inputMsg.inputCommand.playerId;
             
-            Debug.Log($"[NetworkStateHost] Received InputCommand from {playerId}, move={inputMsg.inputCommand.move}, aimDir={inputMsg.inputCommand.aimDir}");
+            // Debug.Log($"[NetworkStateHost] Received InputCommand from {playerId}, move={inputMsg.inputCommand.move}, aimDir={inputMsg.inputCommand.aimDir}");
             
             // Queue-based processing: Add input to the list for this player
             if (!receivedInputs.ContainsKey(playerId))
@@ -69,7 +69,7 @@ public class NetworkStateHost : MonoBehaviour
             }
             
             receivedInputs[playerId].Add(inputMsg.inputCommand);
-            Debug.Log($"[NetworkStateHost] Queued input! Player {playerId} now has {receivedInputs[playerId].Count} inputs pending");
+            // Debug.Log($"[NetworkStateHost] Queued input! Player {playerId} now has {receivedInputs[playerId].Count} inputs pending");
         }
     }
     
@@ -107,7 +107,7 @@ public class NetworkStateHost : MonoBehaviour
             string playerId = kvp.Key;
             List<InputCommand> inputQueue = kvp.Value;
             
-            Debug.Log($"[NetworkStateHost] Processing {inputQueue.Count} queued inputs for playerId={playerId}");
+            // Debug.Log($"[NetworkStateHost] Processing {inputQueue.Count} queued inputs for playerId={playerId}");
             
             NetworkedPlayer networkedPlayer = PlayerSpawner.Instance.GetPlayer(playerId);
             
@@ -136,7 +136,7 @@ public class NetworkStateHost : MonoBehaviour
                 networkedPlayer.playerController.SimulateMovement(lastInput.move);
                 networkedPlayer.playerController.SimulateLook(lastInput.aimDir);
                 
-                Debug.Log($"[NetworkStateHost] Applied LAST input from {playerId}, move={lastInput.move}, aimDir={lastInput.aimDir}");
+                // Debug.Log($"[NetworkStateHost] Applied LAST input from {playerId}, move={lastInput.move}, aimDir={lastInput.aimDir}");
                 
                 // Process ALL fire inputs (each shot matters!)
                 foreach (InputCommand input in inputQueue)
@@ -151,7 +151,7 @@ public class NetworkStateHost : MonoBehaviour
                         ShootEventMessage shootMsg = new ShootEventMessage(playerId, shootOrigin, input.aimDir);
                         NetworkManager.Instance.SendMessageToAll(shootMsg, LiteNetLib.DeliveryMethod.ReliableOrdered);
                         
-                        Debug.Log($"[NetworkStateHost] Broadcast shoot event from {playerId}");
+                        // Debug.Log($"[NetworkStateHost] Broadcast shoot event from {playerId}");
                     }
                 }
                 
@@ -159,7 +159,7 @@ public class NetworkStateHost : MonoBehaviour
             }
         }
         
-        Debug.Log($"[NetworkStateHost] Processed inputs for {totalInputsProcessed} players this tick");
+        // Debug.Log($"[NetworkStateHost] Processed inputs for {totalInputsProcessed} players this tick");
         
         // Clear all input queues
         receivedInputs.Clear();

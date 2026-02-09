@@ -66,6 +66,8 @@ public static class MessageSerializer
                 return new JoinLobbyResponse();
             case MessageType.LeaveLobby:
                 return new LeaveLobby();
+            case MessageType.PlayerDisconnected:
+                return new PlayerDisconnectedMessage();
             case MessageType.InputCommand:
                 return new InputCommandMessage();
             case MessageType.StateUpdate:
@@ -76,6 +78,16 @@ public static class MessageSerializer
                 return new ShootEventMessage();
             case MessageType.Heartbeat:
                 return new Heartbeat();
+            case MessageType.HostFailureDetect:
+                return new HostFailureDetectMessage();
+            case MessageType.PeerListUpdate:
+                return new PeerListUpdateMessage();
+            case MessageType.HostElectionRequest:
+                return new HostElectionRequest();
+            case MessageType.HostElectionResponse:
+                return new HostElectionResponse();
+            case MessageType.HostClaim:
+                return new HostClaimMessage();
             default:
                 return null;
         }

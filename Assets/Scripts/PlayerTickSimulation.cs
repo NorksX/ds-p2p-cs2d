@@ -54,14 +54,7 @@ public class PlayerTickSimulation : MonoBehaviour
 
     private void HandleTick(int tick)
     {
-        // CRITICAL: Double-check we're not running on a remote player
-        // This handles race conditions where the component might not be disabled yet
-        NetworkedPlayer networkedPlayer = GetComponent<NetworkedPlayer>();
-        if (networkedPlayer != null && !networkedPlayer.isLocalPlayer)
-        {
-            Debug.LogWarning($"[PlayerTickSimulation] HandleTick called on REMOTE player {networkedPlayer.playerId}! This should not happen!");
-            return;
-        }
+        // Redundant check removed. Start() ensures this component is disabled for remote players.
 
         if (player == null || buffer == null)
             return;
@@ -87,7 +80,7 @@ public class PlayerTickSimulation : MonoBehaviour
                     Vector2 shootOrigin = transform.position;
                     ShootEventMessage shootMsg = new ShootEventMessage(np.playerId, shootOrigin, cmd.aimDir);
                     NetworkManager.Instance.SendMessageToAll(shootMsg, LiteNetLib.DeliveryMethod.ReliableOrdered);
-                    Debug.Log($"[PlayerTickSimulation] Host broadcasted own shoot event");
+                    // Debug.Log($"[PlayerTickSimulation] Host broadcasted own shoot event");
                 }
             }
         }
