@@ -169,7 +169,11 @@ public class NetworkStateHost : MonoBehaviour
     {
         if (PlayerSpawner.Instance == null)
             return;
-        
+
+        // Nothing to tell an empty lobby - this used to broadcast every tick regardless.
+        if (NetworkManager.Instance.ConnectedPeers.Count == 0)
+            return;
+
         List<PlayerState> playerStates = new List<PlayerState>();
         
         // Collect player states

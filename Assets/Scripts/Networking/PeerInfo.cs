@@ -12,7 +12,13 @@ public class PeerInfo
     public LiteNetLib.NetPeer netPeer;
     public int lastHeartbeatTick;
     public float lastHeartbeatReceiveTime; // Local time when last heartbeat was received
-    
+
+    // Port the peer listens on, for dialling it directly during host migration.
+    public int listenPort;
+
+    // Set on the peer we currently treat as host. Replaces matching on username.
+    public bool isHost;
+
     public PeerInfo(string peerId, string username, int playerPosition, LiteNetLib.NetPeer netPeer)
     {
         this.peerId = peerId;

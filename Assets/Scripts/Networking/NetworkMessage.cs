@@ -12,13 +12,13 @@ public enum MessageType : byte
     // Game messages (20-30)
     InputCommand = 20,
     StateUpdate = 21,
-    StartGame = 22,
+    // 22 was StartGame, retired when spawning became roster-driven.
     ShootEvent = 23,  // Broadcast shooting events
     
     // System messages (100+)
     Heartbeat = 100,
     HostFailureDetect = 101, // Broadcast when host timeout detected
-    PeerListUpdate = 102,    // Host sends list of all peers to everyone
+    SessionRoster = 102,     // Host sends the authoritative participant list to everyone
     HostElectionRequest = 103, // Candidate requests votes
     HostElectionResponse = 104, // Peer votes
     HostClaim = 105

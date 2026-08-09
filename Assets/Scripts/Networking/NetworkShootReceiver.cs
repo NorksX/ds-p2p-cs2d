@@ -25,8 +25,10 @@ public class NetworkShootReceiver : MonoBehaviour
 
     private void HandleMessage(INetworkMessage message, NetPeer peer)
     {
-        // Debug.Log($"[NetworkShootReceiver] HandleMessage called! Type={message.GetMessageType()}");
-        
+        // Client-only: the host authors shoot events and must not replay them.
+        if (NetworkManager.Instance == null || NetworkManager.Instance.IsHost)
+            return;
+
         if (message.GetMessageType() == MessageType.ShootEvent)
         {
             ShootEventMessage shootMsg = (ShootEventMessage)message;

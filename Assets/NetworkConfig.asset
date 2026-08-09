@@ -13,8 +13,6 @@ MonoBehaviour:
   m_Name: NetworkConfig
   m_EditorClassIdentifier: Assembly-CSharp::NetworkConfig
   gamePort: 7777
-  centralServerAddress: 127.0.0.1
-  centralServerPort: 8888
   tickRate: 30
   fullStateInterval: 500
   heartbeatInterval: 200

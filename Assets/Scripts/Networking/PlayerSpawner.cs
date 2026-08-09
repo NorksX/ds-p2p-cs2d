@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.InputSystem;
 using System.Collections.Generic;
 
 /// <summary>
@@ -28,24 +29,8 @@ public class PlayerSpawner : MonoBehaviour
         Instance = this;
     }
     
-    private void Start()
-    {
-        if (NetworkManager.Instance != null)
-        {
-            NetworkManager.Instance.OnPeerJoined += HandlePeerJoined;
-            NetworkManager.Instance.OnPeerLeft += HandlePeerLeft;
-        }
-    }
-    
-    private void OnDestroy()
-    {
-        if (NetworkManager.Instance != null)
-        {
-            NetworkManager.Instance.OnPeerJoined -= HandlePeerJoined;
-            NetworkManager.Instance.OnPeerLeft -= HandlePeerLeft;
-        }
-    }
-    
+    // No peer-event subscriptions: SyncToRoster is the only thing that spawns or despawns.
+
     /// <summary>
     /// Spawn local player
     /// </summary>
@@ -91,23 +76,38 @@ public class PlayerSpawner : MonoBehaviour
         
         Vector3 spawnPos = GetSpawnPosition(playerPosition);
         GameObject playerObj = Instantiate(playerPrefab, spawnPos, Quaternion.identity);
-        
+
+        StripInputFrom(playerObj);
+
         NetworkedPlayer networkedPlayer = playerObj.GetComponent<NetworkedPlayer>();
         if (networkedPlayer == null)
             networkedPlayer = playerObj.AddComponent<NetworkedPlayer>();
-        
+
         networkedPlayer.playerId = playerId;
         networkedPlayer.playerPosition = playerPosition;
         networkedPlayer.isLocalPlayer = false;
-        
+
         spawnedPlayers[playerId] = networkedPlayer;
-        
+
         Debug.Log($"Spawned remote player '{username}' at position {playerPosition}");
     }
     
     public void SpawnRemotePlayer(PeerInfo peerInfo)
     {
         SpawnRemotePlayerByInfo(peerInfo.peerId, peerInfo.assignedPlayerPosition, peerInfo.username);
+    }
+
+    // PlayerInput pairs the keyboard/mouse in OnEnable and the first instance claims them,
+    // so a remote player spawned before the local one would steal its input.
+    private void StripInputFrom(GameObject playerObj)
+    {
+        PlayerInput playerInput = playerObj.GetComponent<PlayerInput>();
+        if (playerInput == null)
+            return;
+
+        // Disable first: it unpairs synchronously, Destroy only lands at end of frame.
+        playerInput.enabled = false;
+        Destroy(playerInput);
     }
     
     /// <summary>
@@ -123,6 +123,48 @@ public class PlayerSpawner : MonoBehaviour
         }
     }
     
+    /// <summary>
+    /// Reconcile spawned players against the roster: spawn what is missing, despawn what is gone.
+    /// Idempotent, so it doubles as the late-join and post-migration resync path.
+    /// </summary>
+    public void SyncToRoster(IReadOnlyList<RosterEntry> roster, string localPlayerId)
+    {
+        foreach (var entry in roster)
+        {
+            if (spawnedPlayers.ContainsKey(entry.playerId))
+                continue;
+
+            if (entry.playerId == localPlayerId)
+                SpawnLocalPlayer(entry.spawnSlot);
+            else
+                SpawnRemotePlayerByInfo(entry.playerId, entry.spawnSlot, entry.username);
+        }
+
+        List<string> departed = null;
+
+        foreach (var kvp in spawnedPlayers)
+        {
+            bool stillPresent = false;
+            foreach (var entry in roster)
+            {
+                if (entry.playerId == kvp.Key)
+                {
+                    stillPresent = true;
+                    break;
+                }
+            }
+
+            if (!stillPresent)
+                (departed ??= new List<string>()).Add(kvp.Key);
+        }
+
+        if (departed == null)
+            return;
+
+        foreach (string playerId in departed)
+            DespawnPlayer(playerId);
+    }
+
     public NetworkedPlayer GetPlayer(string playerId)
     {
         spawnedPlayers.TryGetValue(playerId, out NetworkedPlayer player);
@@ -143,18 +185,5 @@ public class PlayerSpawner : MonoBehaviour
         
         // Default spawn positions
         return new Vector3(playerPosition * 2, 0, 0);
-    }
-    
-    private void HandlePeerJoined(PeerInfo peerInfo)
-    {
-        // DON'T auto-spawn here! Players should only spawn when the game starts.
-        // This was causing duplicate spawning: once on lobby join, once on game start.
-        
-        Debug.Log($"[PlayerSpawner] Peer {peerInfo.username} joined lobby (will spawn when game starts)");
-    }
-    
-    private void HandlePeerLeft(PeerInfo peerInfo)
-    {
-        DespawnPlayer(peerInfo.peerId);
     }
 }

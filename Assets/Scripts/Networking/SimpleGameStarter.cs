@@ -1,8 +1,9 @@
 using UnityEngine;
-using System.Collections.Generic;
 
 /// <summary>
-/// lobby to start
+/// Swaps the lobby UI for the gameplay UI once the local player exists.
+/// Spawning itself is roster-driven (see PlayerSpawner.SyncToRoster) so that joining
+/// mid-game works - there is no longer a "start" step gating it.
 /// </summary>
 public class SimpleGameStarter : MonoBehaviour
 {
@@ -10,153 +11,45 @@ public class SimpleGameStarter : MonoBehaviour
     [SerializeField] private GameObject lobbyUI;
     [SerializeField] private GameObject gameplayPanel;
     [SerializeField] private GameObject startGameButton;
-    
+
+    private bool inGame;
+
     private void Update()
     {
-        if (NetworkManager.Instance != null && startGameButton != null)
+        bool localPlayerExists = LocalPlayerExists();
+
+        if (localPlayerExists != inGame)
         {
-            // Only show button if player is host
-            bool isHost = NetworkManager.Instance.IsHost;
-            bool inLobby = NetworkManager.Instance.State == ConnectionState.InLobby;
-            
-            if (startGameButton.activeSelf != (isHost && inLobby))
-            {
-                startGameButton.SetActive(isHost && inLobby);
-            }
+            inGame = localPlayerExists;
+            ApplyUIState();
         }
+
+        // Hidden until Phase 5 gives it a purpose (starting zombie waves).
+        if (startGameButton != null && startGameButton.activeSelf)
+            startGameButton.SetActive(false);
     }
-    
-    private void Start()
+
+    private bool LocalPlayerExists()
     {
-        Debug.Log("[SimpleGameStarter] Start() called");
-        
-        if (NetworkManager.Instance != null)
-        {
-            NetworkManager.Instance.OnGameStarted += HandleGameStarted;
-            Debug.Log("[SimpleGameStarter] Subscribed to OnGameStarted event");
-        }
-        else
-        {
-            Debug.LogError("[SimpleGameStarter] NetworkManager.Instance is NULL!");
-        }
+        if (NetworkManager.Instance == null || PlayerSpawner.Instance == null)
+            return false;
+
+        return PlayerSpawner.Instance.GetPlayer(NetworkManager.Instance.LocalPlayerId) != null;
     }
-    
-    private void OnDestroy()
+
+    private void ApplyUIState()
     {
-        if (NetworkManager.Instance != null)
-        {
-            NetworkManager.Instance.OnGameStarted -= HandleGameStarted;
-            Debug.Log("[SimpleGameStarter] Unsubscribed from OnGameStarted event");
-        }
+        if (lobbyUI != null)
+            lobbyUI.SetActive(!inGame);
+
+        if (gameplayPanel != null)
+            gameplayPanel.SetActive(inGame);
+
+        Debug.Log(inGame ? "[SimpleGameStarter] Entered game" : "[SimpleGameStarter] Returned to lobby");
     }
-    
-    // UI BUTTON CALL
+
+    // Kept so the scene's button wiring stays intact. Phase 5 will start waves here.
     public void StartGame()
     {
-        Debug.Log("[SimpleGameStarter] StartGame() called!");
-        
-        if (NetworkManager.Instance == null)
-        {
-            Debug.LogError("[SimpleGameStarter] NetworkManager is NULL!");
-            return;
-        }
-        
-        if (!NetworkManager.Instance.IsHost)
-        {
-            Debug.LogWarning("[SimpleGameStarter] Only Host can start the game! IsHost=" + NetworkManager.Instance.IsHost);
-            return;
-        }
-        
-        Debug.Log("[SimpleGameStarter] Host is starting game...");
-        
-        List<PlayerSpawnInfo> allPlayers = new List<PlayerSpawnInfo>();
-        
-        // Add Host (Local)
-        allPlayers.Add(new PlayerSpawnInfo
-        {
-            playerId = NetworkManager.Instance.LocalPlayerId,
-            username = "Host",
-            spawnPositionIndex = 0,
-            isHost = true
-        });
-        
-        Debug.Log($"[SimpleGameStarter] Added Host to player list. ID={NetworkManager.Instance.LocalPlayerId}");
-        
-        // Add Clients
-        foreach (var peer in NetworkManager.Instance.ConnectedPeers.Values)
-        {
-            allPlayers.Add(new PlayerSpawnInfo
-            {
-                playerId = peer.peerId,
-                username = peer.username,
-                spawnPositionIndex = peer.assignedPlayerPosition,
-                isHost = false
-            });
-            
-            Debug.Log($"[SimpleGameStarter] Added Client to player list. ID={peer.peerId}, Username={peer.username}, Position={peer.assignedPlayerPosition}");
-        }
-        
-        Debug.Log($"[SimpleGameStarter] Broadcasting StartGame message with {allPlayers.Count} players");
-        
-        // Broadcast start game
-        NetworkManager.Instance.BroadcastGameStart(allPlayers);
-    }
-    
-    private void HandleGameStarted(StartGameMessage message)
-    {
-        Debug.Log($"[SimpleGameStarter] HandleGameStarted() called! Players in message: {message.players.Count}");
-        
-        //  Update UI
-        Debug.Log("[SimpleGameStarter] Hiding lobby UI, showing gameplay UI...");
-        
-        if (lobbyUI != null)
-        {
-            lobbyUI.SetActive(false);
-            Debug.Log("[SimpleGameStarter] LobbyUI hidden");
-        }
-        else
-        {
-            Debug.LogWarning("[SimpleGameStarter] LobbyUI is NULL!");
-        }
-        
-        if (gameplayPanel != null)
-        {
-            gameplayPanel.SetActive(true);
-            Debug.Log("[SimpleGameStarter] GameplayPanel shown");
-        }
-        else
-        {
-            Debug.LogWarning("[SimpleGameStarter] GameplayPanel is NULL!");
-        }
-        
-        //  Spawn Players
-        if (PlayerSpawner.Instance != null)
-        {
-            Debug.Log($"[SimpleGameStarter] PlayerSpawner found. LocalPlayerId={NetworkManager.Instance.LocalPlayerId}");
-            
-            foreach (var playerInfo in message.players)
-            {
-                Debug.Log($"[SimpleGameStarter] Processing player: ID={playerInfo.playerId}, Username={playerInfo.username}, Position={playerInfo.spawnPositionIndex}, IsHost={playerInfo.isHost}");
-                
-                if (playerInfo.playerId == NetworkManager.Instance.LocalPlayerId)
-                {
-                    //local
-                    Debug.Log($"[SimpleGameStarter] Spawning LOCAL player at position {playerInfo.spawnPositionIndex}");
-                    PlayerSpawner.Instance.SpawnLocalPlayer(playerInfo.spawnPositionIndex);
-                }
-                else
-                {
-                    //remtote
-                    Debug.Log($"[SimpleGameStarter] Spawning REMOTE player '{playerInfo.username}' at position {playerInfo.spawnPositionIndex}");
-                    PlayerSpawner.Instance.SpawnRemotePlayerByInfo(playerInfo.playerId, playerInfo.spawnPositionIndex, playerInfo.username);
-                }
-            }
-            
-            Debug.Log("[SimpleGameStarter] All players spawned!");
-        }
-        else
-        {
-            Debug.LogError("[SimpleGameStarter] PlayerSpawner.Instance is NULL!");
-        }
     }
 }

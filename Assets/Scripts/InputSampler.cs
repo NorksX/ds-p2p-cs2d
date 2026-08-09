@@ -67,19 +67,43 @@ public class InputSampler : MonoBehaviour
             TickManager.Instance.OnTick -= HandleTick;
     }
 
+    private void OnDisable()
+    {
+        ClearInput();
+    }
+
+    private void OnApplicationFocus(bool hasFocus)
+    {
+        // Callbacks stop arriving when unfocused, so held values would latch.
+        if (!hasFocus)
+            ClearInput();
+    }
+
+    private void ClearInput()
+    {
+        moveInput = Vector2.zero;
+        fireHeld = false;
+        firePressedThisFrame = false;
+    }
+
 //input callbacks
+// Guarded on 'enabled' because UnityEvents still fire on a disabled MonoBehaviour.
     public void OnMove(InputAction.CallbackContext context)
     {
+        if (!enabled) return;
         moveInput = context.ReadValue<Vector2>();
     }
 
     public void OnLook(InputAction.CallbackContext context)
     {
+        if (!enabled) return;
         lookScreenPos = context.ReadValue<Vector2>();
     }
 
     public void OnFire(InputAction.CallbackContext context)
     {
+        if (!enabled) return;
+
         if (context.started)
             firePressedThisFrame = true;
 

@@ -23,39 +23,19 @@ public class NetworkManager : MonoBehaviour, INetEventListener
     private NetManager netManager;
     private ConnectionState state = ConnectionState.Disconnected;
     
-    // Peers
-    public Dictionary<int, PeerInfo> connectedPeers = new Dictionary<int, PeerInfo>();
-    private int nextPlayerPosition = 0;
-    
-    // Host Migration: List of all peers in the session (including self and host)
-    private List<PeerConnectionInfo> knownPeers = new List<PeerConnectionInfo>();
-    
-    public bool isHost = false; // Restored field
+    // Identified participants, keyed by stable playerId. NetPeer.Id is connection-local and
+    // differs on every machine, so it serves only as a lookup index into this.
+    private Dictionary<string, PeerInfo> peers = new Dictionary<string, PeerInfo>();
+    private Dictionary<int, string> playerIdByNetPeer = new Dictionary<int, string>();
 
-    private void BroadcastPeerList()
-    {
-        if (!isHost) return;
-        
-        // 1. Collect all connected peers
-        List<PeerConnectionInfo> allPeers = new List<PeerConnectionInfo>();
-        
-        // Add Host (Self) - Clients already know Host IP via connection
-        
-        // Add Clients
-        foreach (var peerInfo in connectedPeers.Values)
-        {
-            // Clients: Address is accessible directly from NetPeer
-            string ip = peerInfo.netPeer.Address.ToString();
-            int port = peerInfo.netPeer.Port;
-            
-            allPeers.Add(new PeerConnectionInfo(peerInfo.peerId, peerInfo.username, ip, port));
-        }
-        
-        // 2. Create and Broadcast Message
-        PeerListUpdateMessage msg = new PeerListUpdateMessage(allPeers);
-        SendMessageToAll(msg, DeliveryMethod.ReliableOrdered);
-        // Debug.Log($"[NetworkManager] Broadcasted PeerListUpdate with {allPeers.Count} peers");
-    }
+    // Authoritative participant list. Host builds and broadcasts it; clients cache it.
+    private List<RosterEntry> roster = new List<RosterEntry>();
+
+    private string currentHostId;
+    private int localSpawnSlot = -1;
+
+    public bool isHost = false;
+
     // Events
     public event Action<PeerInfo> OnPeerJoined;
     public event Action<PeerInfo> OnPeerLeft;
@@ -65,7 +45,153 @@ public class NetworkManager : MonoBehaviour, INetEventListener
     public ConnectionState State => state;
     public bool IsHost => isHost;
     public string LocalPlayerId => localPlayerId;
-    public IReadOnlyDictionary<int, PeerInfo> ConnectedPeers => connectedPeers;
+    public string LocalUsername => localPlayerUsername;
+    public int LocalSpawnSlot => localSpawnSlot;
+    public IReadOnlyDictionary<string, PeerInfo> ConnectedPeers => peers;
+    public IReadOnlyList<RosterEntry> Roster => roster;
+
+//peer table
+
+    private PeerInfo RegisterPeer(string playerId, string username, int spawnSlot, NetPeer peer)
+    {
+        // Drop any stale NetPeer mapping if this player reconnected on a new connection.
+        if (peers.TryGetValue(playerId, out PeerInfo existing) && existing.netPeer != null)
+            playerIdByNetPeer.Remove(existing.netPeer.Id);
+
+        PeerInfo info = new PeerInfo(playerId, username, spawnSlot, peer);
+        peers[playerId] = info;
+        playerIdByNetPeer[peer.Id] = playerId;
+        return info;
+    }
+
+    private void UnregisterPeer(string playerId)
+    {
+        if (!peers.TryGetValue(playerId, out PeerInfo info))
+            return;
+
+        if (info.netPeer != null)
+            playerIdByNetPeer.Remove(info.netPeer.Id);
+
+        peers.Remove(playerId);
+    }
+
+    private PeerInfo FindPeer(NetPeer peer)
+    {
+        if (peer == null || !playerIdByNetPeer.TryGetValue(peer.Id, out string playerId))
+            return null;
+
+        peers.TryGetValue(playerId, out PeerInfo info);
+        return info;
+    }
+
+//roster
+
+    // Lowest free slot, so a departing player's slot is reused instead of leaking.
+    private int AllocateSpawnSlot()
+    {
+        for (int slot = 0; slot < config.maxPlayers; slot++)
+        {
+            if (slot == localSpawnSlot)
+                continue;
+
+            bool taken = false;
+            foreach (var p in peers.Values)
+            {
+                if (p.assignedPlayerPosition == slot)
+                {
+                    taken = true;
+                    break;
+                }
+            }
+
+            if (!taken)
+                return slot;
+        }
+
+        return -1;
+    }
+
+    private void RebuildRoster()
+    {
+        roster.Clear();
+
+        // Host cannot know which of its addresses clients reached it on, so it leaves
+        // ipAddress empty and each client fills in the address it already connected to.
+        roster.Add(new RosterEntry(localPlayerId, localPlayerUsername, localSpawnSlot, "", netManager.LocalPort, true));
+
+        foreach (var p in peers.Values)
+        {
+            roster.Add(new RosterEntry(
+                p.peerId,
+                p.username,
+                p.assignedPlayerPosition,
+                p.netPeer.Address.ToString(),
+                p.listenPort > 0 ? p.listenPort : p.netPeer.Port,
+                false));
+        }
+    }
+
+    private void BroadcastRoster()
+    {
+        if (!isHost) return;
+
+        RebuildRoster();
+        SendMessageToAll(new SessionRosterMessage(roster), DeliveryMethod.ReliableOrdered);
+        ApplyRoster();
+
+        // Resend is periodic, so only log when the composition actually changed.
+        string signature = RosterSignature();
+        if (signature != lastLoggedRosterSignature)
+        {
+            lastLoggedRosterSignature = signature;
+            Debug.Log($"[NetworkManager] Roster now {roster.Count} participants: {signature}");
+        }
+
+        lastRosterResyncTime = Time.time;
+    }
+
+    private string RosterSignature()
+    {
+        System.Text.StringBuilder sb = new System.Text.StringBuilder();
+
+        foreach (var e in roster)
+        {
+            if (sb.Length > 0) sb.Append(", ");
+            sb.Append(e.username).Append("#").Append(e.spawnSlot);
+            if (e.isHost) sb.Append("(host)");
+        }
+
+        return sb.ToString();
+    }
+
+    // The roster is the single source of truth for who exists, so spawning follows it
+    // directly. That is what makes joining mid-game work without a separate code path.
+    private void ApplyRoster()
+    {
+        if (PlayerSpawner.Instance != null)
+            PlayerSpawner.Instance.SyncToRoster(roster, localPlayerId);
+    }
+
+    private RosterEntry FindRosterEntry(string playerId)
+    {
+        foreach (var e in roster)
+        {
+            if (e.playerId == playerId)
+                return e;
+        }
+        return null;
+    }
+
+    private RosterEntry FindRosterEntryByEndpoint(NetPeer peer)
+    {
+        string ip = peer.Address.ToString();
+        foreach (var e in roster)
+        {
+            if (e.ipAddress == ip && (e.listenPort == peer.Port))
+                return e;
+        }
+        return null;
+    }
     
     private void Awake()
     {
@@ -90,34 +216,43 @@ public class NetworkManager : MonoBehaviour, INetEventListener
         
         // Initialize LiteNetLib
         netManager = new NetManager(this);
-    }
-    
-    private void Start()
-    {
-        // Subscribe to tick events for heartbeat
-        if (TickManager.Instance != null)
+
+        if (config != null)
         {
-            TickManager.Instance.OnTick += HandleTick;
+            // Drives LiteNetLib's own peer drop; otherwise transport defaults apply.
+            netManager.DisconnectTimeout = config.connectionTimeout;
+        }
+        else
+        {
+            Debug.LogError("[NetworkManager] No NetworkConfig assigned - using transport defaults");
         }
     }
-    
+
     private float lastHeartbeatSendTime = 0f;
-    private const float HEARTBEAT_INTERVAL = 0.5f;
+    private float lastRosterResyncTime = 0f;
+    private string lastLoggedRosterSignature = "";
     private const float HOST_TIMEOUT = 5.0f;
-    
+
+    private float HeartbeatInterval => config != null ? config.heartbeatInterval / 1000f : 0.5f;
+    private float RosterResyncInterval => config != null ? config.fullStateInterval / 1000f : 0.5f;
+
     private void Update()
     {
         netManager?.PollEvents();
-        
+
         // Heartbeat Logic
         if (state != ConnectionState.Disconnected)
         {
-            // 1. Send Heartbeats
-            if (Time.time - lastHeartbeatSendTime > HEARTBEAT_INTERVAL)
+            // Only heartbeat sender - a second tick-driven one used to run in parallel.
+            if (Time.time - lastHeartbeatSendTime > HeartbeatInterval)
             {
                 SendHeartbeat();
                 lastHeartbeatSendTime = Time.time;
             }
+
+            // Periodic roster resync, so a peer that somehow diverged heals itself.
+            if (isHost && peers.Count > 0 && Time.time - lastRosterResyncTime > RosterResyncInterval)
+                BroadcastRoster();
             
             // 2. Check for Host Failure (Clients only)
             if (!isHost)
@@ -132,33 +267,28 @@ public class NetworkManager : MonoBehaviour, INetEventListener
         int currentTick = TickManager.Instance != null ? TickManager.Instance.CurrentTick : 0;
         Heartbeat msg = new Heartbeat(currentTick, localPlayerId);
         
-        // Send to all connected peers (Host -> Clients, Client -> Host)
-        // Note: For client, connectedPeers usually contains just the host
+        // Transport-level list, so unidentified mesh connections are covered too.
         foreach (var peer in netManager.ConnectedPeerList)
         {
             SendMessage(msg, (NetPeer)peer, DeliveryMethod.Unreliable);
         }
     }
     
+    // Only the host's silence means anything - a quiet mesh peer used to trigger a
+    // false host failure and a spurious election.
     private void CheckHostTimeout()
     {
-        // Iterate through connected peers to find the host
-        foreach (var kvp in connectedPeers)
+        if (state == ConnectionState.HostMigration) return;
+        if (string.IsNullOrEmpty(currentHostId)) return;
+
+        if (!peers.TryGetValue(currentHostId, out PeerInfo host)) return;
+
+        if (Time.time - host.lastHeartbeatReceiveTime > HOST_TIMEOUT)
         {
-            PeerInfo p = kvp.Value;
-            
-            // If we haven't received a heartbeat from the host in allowed time
-            if (Time.time - p.lastHeartbeatReceiveTime > HOST_TIMEOUT)
-            {
-                Debug.LogError($"[NetworkManager] HOST TIMEOUT DETECTED! Last heard: {p.lastHeartbeatReceiveTime}, Now: {Time.time}");
-                
-                // Trigger Host Failure sequence
-                if (state != ConnectionState.HostMigration)
-                {
-                    HostFailureDetectMessage msg = new HostFailureDetectMessage(localPlayerId, TickManager.Instance.CurrentTick);
-                    HandleHostFailureDetect(msg);
-                }
-            }
+            Debug.LogError($"[NetworkManager] HOST TIMEOUT: last heard {Time.time - host.lastHeartbeatReceiveTime:F1}s ago");
+
+            HostFailureDetectMessage msg = new HostFailureDetectMessage(localPlayerId, TickManager.Instance.CurrentTick);
+            HandleHostFailureDetect(msg);
         }
     }
     
@@ -172,26 +302,15 @@ public class NetworkManager : MonoBehaviour, INetEventListener
             Debug.Log("[NetworkManager] STATE CHANGED TO: HostMigration");
         }
         
-        // Connect to all known peers to form a mesh
-        foreach (var peer in knownPeers)
+        // Dial every surviving participant to form a mesh.
+        foreach (var entry in roster)
         {
-             // Skip self
-             if (peer.peerId == localPlayerId) continue;
-             
-             // Skip dead host (connection failed) and connect to everyone else
-             
-             // Check if already connected
-             bool alreadyConnected = false;
-             foreach(var p in connectedPeers.Values) 
-             { 
-                 if(p.peerId == peer.peerId) alreadyConnected = true; 
-             }
-             
-             if (!alreadyConnected)
-             {
-                 Debug.Log($"[HostMigration] Connecting to peer {peer.ipAddress}:{peer.port}");
-                 netManager.Connect(peer.ipAddress, peer.port, "");
-             }
+            if (entry.playerId == localPlayerId) continue;
+            if (entry.playerId == currentHostId) continue;
+            if (peers.ContainsKey(entry.playerId)) continue;
+
+            Debug.Log($"[HostMigration] Connecting to peer {entry.ipAddress}:{entry.listenPort}");
+            netManager.Connect(entry.ipAddress, entry.listenPort, "");
         }
         
         // Broadcast failure to anyone we ARE connected to (to spread the word)
@@ -215,21 +334,16 @@ public class NetworkManager : MonoBehaviour, INetEventListener
         
         // Logic: Lowest string ID wins
         bool amIBestCandidate = true;
-        
-        Debug.Log($"[HostMigration] Known Peers Count: {knownPeers.Count}");
-        foreach (var peer in knownPeers)
+
+        Debug.Log($"[HostMigration] Roster size: {roster.Count}, dead host: {currentHostId}");
+        foreach (var entry in roster)
         {
-             // Debug.Log($"[HostMigration] Comparing against: {peer.peerId} (isHost={peer.peerId=="host"})");
-             
-             // Skip self
-             if (peer.peerId == localPlayerId) continue;
-             if (peer.peerId == "host") continue; // Old host ID
-             
-             // Compare IDs
-             if (string.Compare(peer.peerId, localPlayerId) < 0)
+             if (entry.playerId == localPlayerId) continue;
+             if (entry.playerId == currentHostId) continue;
+
+             if (string.Compare(entry.playerId, localPlayerId) < 0)
              {
-                 Debug.Log($"[HostMigration] Found better candidate: {peer.peerId} < {localPlayerId}");
-                 // Peer ID is smaller than mine -> They should be host
+                 Debug.Log($"[HostMigration] Found better candidate: {entry.playerId} < {localPlayerId}");
                  amIBestCandidate = false;
                  break;
              }
@@ -288,16 +402,15 @@ public class NetworkManager : MonoBehaviour, INetEventListener
     
     private void CheckElectionVictory()
     {
-         // Victory Condition: > 50% of known peers (excluding dead host)
+         // Victory condition: strict majority of surviving participants (dead host excluded).
          int totalVoters = 0;
-         foreach(var p in knownPeers)
+         foreach (var entry in roster)
          {
-             if(p.peerId != "host") totalVoters++;
+             if (entry.playerId != currentHostId) totalVoters++;
          }
-         
-         // If knownPeers is empty (standalone), assume totalVoters=1 (self) if not in list
-         if (totalVoters == 0 && knownPeers.Count == 0) totalVoters = 1; 
-         
+
+         if (totalVoters == 0) totalVoters = 1;
+
          int threshold = totalVoters / 2;
          
          // Debug.Log($"[HostElection] Victory Check: Votes={receivedVotes}, Threshold={threshold}, TotalVoters={totalVoters}");
@@ -313,56 +426,53 @@ public class NetworkManager : MonoBehaviour, INetEventListener
     {
         Debug.Log("[HostMigration] CLAIMING HOST ROLE...");
         
-        // 1. Become Host
+        string deadHostId = currentHostId;
+
         isHost = true;
-        state = ConnectionState.InLobby; // Restore to valid gameplay state
-        
-        // 2. Identify ourselves as "host" (connectedPeers will now contain only clients)
-        
-        // 3. Broadcast Claim
+        currentHostId = localPlayerId;
+        state = ConnectionState.InLobby;
+
+        // Drop the dead host and clear stale host flags before taking ownership of the roster.
+        if (!string.IsNullOrEmpty(deadHostId))
+            UnregisterPeer(deadHostId);
+
+        foreach (var p in peers.Values)
+            p.isHost = false;
+
         HostClaimMessage claimMsg = new HostClaimMessage(localPlayerId, TickManager.Instance.CurrentTick);
         SendMessageToAll(claimMsg, DeliveryMethod.ReliableOrdered);
-        
-        // 4. Input handling automatically resumes as we are now Host
-        
-        Debug.Log("[HostMigration] Host Claim Broadcasted. I am now the Captain.");
+
+        BroadcastRoster();
+
+        Debug.Log("[HostMigration] Host claim broadcast. I am now the host.");
     }
     
     private void HandleHostClaim(HostClaimMessage message, NetPeer sender)
     {
-        Debug.Log($"[HostMigration] Received Host Claim from {message.newHostId}");
-        
-        // 1. Acknowledge new host
-        // We need to treat the sender as the new "host" peer
-        
-        // Update connectedPeers to allow input sending
-        // Use the actual UUID (message.newHostId) so PlayerSpawner can find it later (Fixes Ghost Player?)
-        PeerInfo newHostInfo = new PeerInfo(message.newHostId, "NewHost", 0, sender);
-        
-        // Remove old host key if exists (it might be "host" or the UUID)
-        if (connectedPeers.ContainsKey("host".GetHashCode())) connectedPeers.Remove("host".GetHashCode());
-        // Also remove any existing mesh connection to this peer (if we knew them as a client before)
-        if (connectedPeers.ContainsKey(sender.Id)) connectedPeers.Remove(sender.Id);
-        
-        // Add new host using the correct LiteNetLib ID (Fixes Timeout)
-        newHostInfo.lastHeartbeatReceiveTime = Time.time; 
-        connectedPeers[sender.Id] = newHostInfo; 
-        
-        // 2. Reset Timeout Tracking (Implicit in new PeerInfo creation)
-        
-        // 3. State Transition
+        Debug.Log($"[HostMigration] Received host claim from {message.newHostId}");
+
+        // Drop the dead host, then promote the claimant. Keyed by playerId, so this no
+        // longer needs the old re-keying dance against connection-local NetPeer ids.
+        if (!string.IsNullOrEmpty(currentHostId))
+            UnregisterPeer(currentHostId);
+
+        RosterEntry entry = FindRosterEntry(message.newHostId);
+        int slot = entry != null ? entry.spawnSlot : 0;
+        string username = entry != null ? entry.username : "NewHost";
+
+        PeerInfo newHostInfo = RegisterPeer(message.newHostId, username, slot, sender);
+        newHostInfo.isHost = true;
+        newHostInfo.lastHeartbeatReceiveTime = Time.time;
+
+        currentHostId = message.newHostId;
         state = ConnectionState.InLobby;
-        Debug.Log("[HostMigration] Accepted new host. Resuming Game.");
+
+        Debug.Log($"[HostMigration] Accepted {message.newHostId} as host. Resuming.");
     }
 
     
     private void OnDestroy()
     {
-        if (TickManager.Instance != null)
-        {
-            TickManager.Instance.OnTick -= HandleTick;
-        }
-        
         netManager?.Stop();
     }
     
@@ -384,8 +494,11 @@ public class NetworkManager : MonoBehaviour, INetEventListener
         if (success)
         {
             isHost = true;
-            nextPlayerPosition = 1; // Host takes position 0 (other clients 1-3)
+            localSpawnSlot = 0;
+            currentHostId = localPlayerId;
             state = ConnectionState.InLobby;
+            RebuildRoster();
+            ApplyRoster();
             Debug.Log($"Hosting lobby on port {config.gamePort}");
         }
         else
@@ -436,12 +549,16 @@ public class NetworkManager : MonoBehaviour, INetEventListener
         }
         
         netManager.Stop();
-        
-        connectedPeers.Clear();
+
+        peers.Clear();
+        playerIdByNetPeer.Clear();
+        roster.Clear();
+        ApplyRoster(); // empty roster despawns everyone, including our own player
         state = ConnectionState.Disconnected;
         isHost = false;
-        nextPlayerPosition = 0;
-        
+        currentHostId = null;
+        localSpawnSlot = -1;
+
         Debug.Log("Left lobby");
     }
     
@@ -460,8 +577,8 @@ public class NetworkManager : MonoBehaviour, INetEventListener
     public void SendMessageToAll(INetworkMessage message, DeliveryMethod deliveryMethod)
     {
         byte[] data = MessageSerializer.Serialize(message);
-        
-        foreach (var peerInfo in connectedPeers.Values)
+
+        foreach (var peerInfo in peers.Values)
         {
             peerInfo.netPeer.Send(data, deliveryMethod);
         }
@@ -471,86 +588,86 @@ public class NetworkManager : MonoBehaviour, INetEventListener
     
     public void OnPeerConnected(NetPeer peer)
     {
-        Debug.Log($"Peer connected: {peer.Port}");
-        
+        Debug.Log($"Peer connected: {peer.Address}:{peer.Port}");
+
         if (isHost)
         {
-            if (nextPlayerPosition >= config.maxPlayers)
+            // Identity and capacity are settled in HandleJoinLobbyRequest, which is the
+            // first point at which we know who this connection actually belongs to.
+            return;
+        }
+
+        if (state == ConnectionState.HostMigration)
+        {
+            // Resolve the real playerId from the roster endpoint. The old code invented
+            // "peer_<id>" placeholders here, which never matched a spawned player and so
+            // left ghosts behind that DespawnPlayer could not find.
+            RosterEntry entry = FindRosterEntryByEndpoint(peer);
+
+            if (entry != null)
             {
-                // Lobby full
-                JoinLobbyResponse response = new JoinLobbyResponse(false, -1, "Lobby is full", localPlayerId);
-                SendMessage(response, peer, DeliveryMethod.ReliableOrdered);
-                peer.Disconnect();
-                return;
+                RegisterPeer(entry.playerId, entry.username, entry.spawnSlot, peer);
+                Debug.Log($"[HostMigration] Mesh peer resolved to {entry.playerId} ({entry.username})");
             }
-            
-
+            else
+            {
+                Debug.LogWarning($"[HostMigration] No roster entry for {peer.Address}:{peer.Port} - not registering");
+            }
+            return;
         }
 
-        else if (state == ConnectionState.HostMigration)
-        {
-             Debug.Log($"[HostMigration] Peer connected: {peer.Address}:{peer.Port}. Adding to connectedPeers for Mesh.");
-             
-             // Create temporary PeerInfo (Mesh Formation) - real UUID resolved during election
-             string tempId = "peer_" + peer.Id;
-             PeerInfo tempInfo = new PeerInfo(tempId, "Unknown", 0, peer);
-             connectedPeers[peer.Id] = tempInfo;
-        }
-        else
-        {
-            JoinLobbyRequest request = new JoinLobbyRequest(localPlayerId, localPlayerUsername, 0);
-            SendMessage(request, peer, DeliveryMethod.ReliableOrdered);
-        }
+        JoinLobbyRequest request = new JoinLobbyRequest(localPlayerId, localPlayerUsername, 0, netManager.LocalPort);
+        SendMessage(request, peer, DeliveryMethod.ReliableOrdered);
     }
     
     public void OnPeerDisconnected(NetPeer peer, DisconnectInfo disconnectInfo)
     {
-        Debug.Log($"Peer disconnected: {peer.Port}, reason: {disconnectInfo.Reason}");
-        
-        if (connectedPeers.TryGetValue(peer.Id, out PeerInfo peerInfo))
+        Debug.Log($"Peer disconnected: {peer.Address}:{peer.Port}, reason: {disconnectInfo.Reason}");
+
+        PeerInfo peerInfo = FindPeer(peer);
+
+        if (peerInfo != null)
         {
             string disconnectedPlayerId = peerInfo.peerId;
-            
-            connectedPeers.Remove(peer.Id);
+            bool wasHost = peerInfo.isHost;
+
+            UnregisterPeer(disconnectedPlayerId);
             OnPeerLeft?.Invoke(peerInfo);
-            
-            // Fix Ghost Player: Destroy the object!
+
             if (PlayerSpawner.Instance != null)
             {
                 PlayerSpawner.Instance.DespawnPlayer(disconnectedPlayerId);
             }
-            
-            // If we're the host, broadcast disconnection to all remaining clients
+
+            // Drop them from the local roster so they are not a candidate in an election.
+            // ApplyRoster despawns them even on a client, where no host broadcast may follow.
+            roster.RemoveAll(e => e.playerId == disconnectedPlayerId);
+            ApplyRoster();
+
             if (isHost)
             {
                 PlayerDisconnectedMessage msg = new PlayerDisconnectedMessage(disconnectedPlayerId);
                 SendMessageToAll(msg, DeliveryMethod.ReliableOrdered);
-                
-                // Host Migration: Update everyone's peer list
-                BroadcastPeerList();
-                
+
+                // Rebroadcast so everyone sees the freed spawn slot.
+                BroadcastRoster();
                 Debug.Log($"[NetworkManager] Broadcasted disconnect for player {disconnectedPlayerId}");
             }
-            
-            // If we are a CLIENT and the HOST disconnected (graceful or otherwise)
-            // Fix: Check username "Host" or "NewHost" because ID is now UUID
-            if (!isHost && (peerInfo.username == "Host" || peerInfo.username == "NewHost"))
+
+            if (!isHost && wasHost)
             {
-                 Debug.LogWarning("[NetworkManager] Host disconnected! Triggering immediate migration.");
-                 HostFailureDetectMessage failMsg = new HostFailureDetectMessage(localPlayerId, TickManager.Instance.CurrentTick);
-                 HandleHostFailureDetect(failMsg);
+                Debug.LogWarning("[NetworkManager] Host disconnected! Triggering immediate migration.");
+                HostFailureDetectMessage failMsg = new HostFailureDetectMessage(localPlayerId, TickManager.Instance.CurrentTick);
+                HandleHostFailureDetect(failMsg);
             }
-            
-            // Fix Split Brain: Remove the disconnected peer from 'knownPeers' 
-            // This ensures we don't consider them a candidate in the next election
-            knownPeers.RemoveAll(p => p.peerId == disconnectedPlayerId);
-            Debug.Log($"[NetworkManager] Removed {disconnectedPlayerId} from valid candidates. Valid Candidates Remaining: {knownPeers.Count}");
         }
-        //change with host migration
-        
-        if (!isHost && connectedPeers.Count == 0 && state != ConnectionState.HostMigration)
+
+        // Lost the host outright and not migrating - drop back to an empty lobby.
+        if (!isHost && peers.Count == 0 && state != ConnectionState.HostMigration)
         {
             state = ConnectionState.Disconnected;
+            roster.Clear();
+            ApplyRoster();
         }
     }
     
@@ -558,17 +675,15 @@ public class NetworkManager : MonoBehaviour, INetEventListener
     {
         byte[] data = reader.GetRemainingBytes();
         INetworkMessage message = MessageSerializer.Deserialize(data);
-        
+
         if (message == null)
         {
             Debug.LogError("Failed to deserialize message");
             return;
         }
         
-        // Handle message based on type
+        // Only place OnMessageReceived is raised - firing it twice double-processed everything.
         HandleMessage(message, peer);
-        
-        // Invoke event for other systems
         OnMessageReceived?.Invoke(message, peer);
     }
     
@@ -583,7 +698,9 @@ public class NetworkManager : MonoBehaviour, INetEventListener
     
     public void OnNetworkLatencyUpdate(NetPeer peer, int latency)
     {
-        if (connectedPeers.TryGetValue(peer.Id, out PeerInfo peerInfo))
+        PeerInfo peerInfo = FindPeer(peer);
+
+        if (peerInfo != null)
         {
             peerInfo.latency = latency;
         }
@@ -612,10 +729,7 @@ public class NetworkManager : MonoBehaviour, INetEventListener
 //message handling    
     private void HandleMessage(INetworkMessage message, NetPeer peer)
     {
-        // CRITICAL: Fire event so other systems (like NetworkStateHost) can handle messages
-        OnMessageReceived?.Invoke(message, peer);
-        
-        // Also handle messages internally
+        // Do not raise OnMessageReceived here - OnNetworkReceive does it after this returns.
         switch (message.GetMessageType())
         {
             case MessageType.JoinLobbyRequest:
@@ -634,17 +748,13 @@ public class NetworkManager : MonoBehaviour, INetEventListener
                 HandlePlayerDisconnected((PlayerDisconnectedMessage)message);
                 break;
                 
-            case MessageType.StartGame:
-                HandleStartGameMessage((StartGameMessage)message, peer);
-                break;
-                
             case MessageType.Heartbeat:
                 // Debug.Log($"[HEARTBEAT RECEIVED] from peer={peer.Id}");
                 HandleHeartbeat((Heartbeat)message, peer);
                 break;
                 
-            case MessageType.PeerListUpdate:
-                HandlePeerListUpdate((PeerListUpdateMessage)message);
+            case MessageType.SessionRoster:
+                HandleSessionRoster((SessionRosterMessage)message, peer);
                 break;
                 
             case MessageType.HostElectionRequest:
@@ -658,62 +768,45 @@ public class NetworkManager : MonoBehaviour, INetEventListener
             case MessageType.HostClaim:
                 HandleHostClaim((HostClaimMessage)message, peer);
                 break;
+
+            // Gameplay messages are intentionally not handled here - NetworkStateHost,
+            // NetworkStateReceiver and NetworkShootReceiver take them off OnMessageReceived.
+            case MessageType.InputCommand:
+            case MessageType.StateUpdate:
+            case MessageType.ShootEvent:
+                break;
+
+            default:
+                Debug.LogWarning($"[NetworkManager] No handler for {message.GetMessageType()}");
+                break;
         }
-    }
-    
-    public event Action<StartGameMessage> OnGameStarted;
-    
-    public void BroadcastGameStart(List<PlayerSpawnInfo> players)
-    {
-        Debug.Log($"[NetworkManager] BroadcastGameStart called. IsHost={isHost}");
-        
-        if (!isHost)
-        {
-            Debug.LogWarning("[NetworkManager] BroadcastGameStart called but we are NOT host!");
-            return;
-        }
-        
-        Debug.Log($"[NetworkManager] Creating StartGameMessage with {players.Count} players");
-        
-        // Host creates start message
-        StartGameMessage message = new StartGameMessage(TickManager.Instance.CurrentTick, players);
-        
-        Debug.Log($"[NetworkManager] Sending StartGameMessage to {connectedPeers.Count} peers");
-        SendMessageToAll(message, DeliveryMethod.ReliableOrdered);
-        
-        // trigger it locally for the host
-        Debug.Log("[NetworkManager] Invoking OnGameStarted locally for host");
-        OnGameStarted?.Invoke(message);
-    }
-    
-    private void HandleStartGameMessage(StartGameMessage message, NetPeer peer)
-    {
-        // Clients receive from host
-        Debug.Log($"[NetworkManager] HandleStartGameMessage! Players to spawn: {message.players.Count}");
-        Debug.Log($"[NetworkManager] OnGameStarted has {(OnGameStarted == null ? 0 : OnGameStarted.GetInvocationList().Length)} subscribers");
-        OnGameStarted?.Invoke(message);
-        Debug.Log("[NetworkManager] OnGameStarted invoked");
     }
     
     private void HandleJoinLobbyRequest(JoinLobbyRequest request, NetPeer peer)
     {
         if (!isHost) return;
-        
-        int playerPos = nextPlayerPosition++;
-        
-        PeerInfo peerInfo = new PeerInfo(request.playerId, request.playerUsername, playerPos, peer);
-        connectedPeers[peer.Id] = peerInfo;
-        
-        // Send Response
-        JoinLobbyResponse response = new JoinLobbyResponse(true, playerPos, "", localPlayerId);
+
+        int slot = AllocateSpawnSlot();
+
+        if (slot < 0)
+        {
+            JoinLobbyResponse full = new JoinLobbyResponse(false, -1, "Lobby is full", localPlayerId);
+            SendMessage(full, peer, DeliveryMethod.ReliableOrdered);
+            peer.Disconnect();
+            Debug.Log($"Rejected {request.playerUsername}: no free spawn slot");
+            return;
+        }
+
+        PeerInfo peerInfo = RegisterPeer(request.playerId, request.playerUsername, slot, peer);
+        peerInfo.listenPort = request.listenPort;
+
+        JoinLobbyResponse response = new JoinLobbyResponse(true, slot, "", localPlayerId);
         SendMessage(response, peer, DeliveryMethod.ReliableOrdered);
-        
-        Debug.Log($"Player {request.playerUsername} joined as position {playerPos}");
-        
+
+        Debug.Log($"Player {request.playerUsername} joined as slot {slot}");
+
         OnPeerJoined?.Invoke(peerInfo);
-        
-        // Host Migration: Update everyone's peer list
-        BroadcastPeerList();
+        BroadcastRoster();
     }
     
     private void HandleJoinLobbyResponse(JoinLobbyResponse response, NetPeer peer)
@@ -723,16 +816,14 @@ public class NetworkManager : MonoBehaviour, INetEventListener
         if (response.accepted)
         {
             state = ConnectionState.InLobby;
-            
-            // CRITICAL FIX: Client needs to track the host peer so SendMessageToAll() works
-            // Create a PeerInfo for the host and add to connectedPeers
-            // Fix Ghost Player: Use actual Host UUID from response
-            string hostId = !string.IsNullOrEmpty(response.hostId) ? response.hostId : "host";
-            PeerInfo hostPeerInfo = new PeerInfo(hostId, "Host", 0, peer);
-            connectedPeers[peer.Id] = hostPeerInfo;
-            
-            Debug.Log($"Joined lobby! Assigned position: {response.assignedPlayerPosition}");
-            Debug.Log($"[NetworkManager] Client added host to connectedPeers. Count={connectedPeers.Count}");
+            localSpawnSlot = response.assignedPlayerPosition;
+
+            // Track the host as a peer so SendMessageToAll reaches it.
+            currentHostId = !string.IsNullOrEmpty(response.hostId) ? response.hostId : "host";
+            PeerInfo hostPeerInfo = RegisterPeer(currentHostId, "Host", 0, peer);
+            hostPeerInfo.isHost = true;
+
+            Debug.Log($"Joined lobby! Assigned slot: {localSpawnSlot}, host={currentHostId}");
         }
         else
         {
@@ -743,7 +834,7 @@ public class NetworkManager : MonoBehaviour, INetEventListener
     
     private void HandleLeaveLobby(LeaveLobby message, NetPeer peer)
     {
-        if (connectedPeers.TryGetValue(peer.Id, out PeerInfo peerInfo))
+        if (FindPeer(peer) != null)
         {
             peer.Disconnect();
         }
@@ -760,44 +851,39 @@ public class NetworkManager : MonoBehaviour, INetEventListener
         }
     }
     
-    // Host Migration: Update local list of known peers
-    private void HandlePeerListUpdate(PeerListUpdateMessage message)
+    private void HandleSessionRoster(SessionRosterMessage message, NetPeer sender)
     {
-        knownPeers = message.peers;
-        Debug.Log($"[NetworkManager] Updated known peers list. Count: {knownPeers.Count}");
+        if (isHost) return;
+
+        roster = message.entries;
+
+        // The host leaves its own address blank, so patch in the one we reached it on.
+        foreach (var e in roster)
+        {
+            if (e.isHost)
+            {
+                if (string.IsNullOrEmpty(e.ipAddress))
+                    e.ipAddress = sender.Address.ToString();
+
+                currentHostId = e.playerId;
+            }
+
+            if (e.playerId == localPlayerId)
+                localSpawnSlot = e.spawnSlot;
+        }
+
+        ApplyRoster();
+        Debug.Log($"[NetworkManager] Roster updated: {roster.Count} participants, host={currentHostId}");
     }
-    
+
     private void HandleHeartbeat(Heartbeat heartbeat, NetPeer peer)
     {
-        if (connectedPeers.TryGetValue(peer.Id, out PeerInfo peerInfo))
+        PeerInfo peerInfo = FindPeer(peer);
+
+        if (peerInfo != null)
         {
             peerInfo.lastHeartbeatTick = heartbeat.tick;
             peerInfo.lastHeartbeatReceiveTime = Time.time;
         }
-    }
-    
-//tick handling    
-    private int ticksSinceLastHeartbeat = 0;
-    
-    private void HandleTick(int tick)
-    {
-        int heartbeatIntervalTicks = (config.heartbeatInterval * config.tickRate) / 1000;
-        
-        ticksSinceLastHeartbeat++;
-        
-        if (ticksSinceLastHeartbeat >= heartbeatIntervalTicks)
-        {
-            ticksSinceLastHeartbeat = 0;
-            SendHeartbeat(tick);
-        }
-    }
-    
-    private void SendHeartbeat(int tick)
-    {
-        if (state == ConnectionState.Disconnected) return;
-        
-        Heartbeat heartbeat = new Heartbeat(tick, localPlayerId);
-        // Debug.Log($"[HEARTBEAT SENT] tick={tick} from HOST {localPlayerId}");
-        SendMessageToAll(heartbeat, DeliveryMethod.Unreliable);
     }
 }

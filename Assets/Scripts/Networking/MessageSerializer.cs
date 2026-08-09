@@ -72,16 +72,14 @@ public static class MessageSerializer
                 return new InputCommandMessage();
             case MessageType.StateUpdate:
                 return new StateUpdateMessage();
-            case MessageType.StartGame:
-                return new StartGameMessage();
             case MessageType.ShootEvent:
                 return new ShootEventMessage();
             case MessageType.Heartbeat:
                 return new Heartbeat();
             case MessageType.HostFailureDetect:
                 return new HostFailureDetectMessage();
-            case MessageType.PeerListUpdate:
-                return new PeerListUpdateMessage();
+            case MessageType.SessionRoster:
+                return new SessionRosterMessage();
             case MessageType.HostElectionRequest:
                 return new HostElectionRequest();
             case MessageType.HostElectionResponse:

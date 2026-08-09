@@ -9,13 +9,7 @@ public class NetworkConfig : ScriptableObject
     [Header("Connection Settings")]
     [Tooltip("Port for P2P game connections")]
     public int gamePort = 7777;
-    
-    [Tooltip("Address of centralized lobby server")]
-    public string centralServerAddress = "127.0.0.1";
-    
-    [Tooltip("Port for centralized lobby server")]
-    public int centralServerPort = 8888;
-    
+
     [Header("Timing")]
     [Tooltip("Simulation ticks per second (should match TickManager)")]
     public int tickRate = 30;

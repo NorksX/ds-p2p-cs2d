@@ -7,15 +7,21 @@ public class LocalInputBuffer : MonoBehaviour
 
     private readonly Dictionary<int, InputCommand> buffer = new Dictionary<int, InputCommand>();
 
+    private int oldestTick;
+
     public void Store(InputCommand cmd)
     {
+        if (buffer.Count == 0)
+            oldestTick = cmd.tick;
+
         buffer[cmd.tick] = cmd;
 
+        // Ticks are monotonic, so sweeping from the oldest frees everything that falls out.
         int minTick = cmd.tick - keepTicks;
-        if (minTick > 0)
+        while (oldestTick < minTick)
         {
-            for (int t = minTick - 60; t < minTick; t++)
-                buffer.Remove(t);
+            buffer.Remove(oldestTick);
+            oldestTick++;
         }
     }
 

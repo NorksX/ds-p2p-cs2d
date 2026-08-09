@@ -159,7 +159,7 @@ public class NetworkTestUI : MonoBehaviour
         // Add a prominent warning if host with no peers
         if (NetworkManager.Instance.IsHost && NetworkManager.Instance.ConnectedPeers.Count == 0)
         {
-            status += "\n\n⚠️ WAITING FOR PLAYERS...";
+            status += "\n\nWAITING FOR PLAYERS...";
         }
         
         statusText.text = status;
