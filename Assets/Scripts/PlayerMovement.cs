@@ -99,41 +99,13 @@ public class PlayerController : MonoBehaviour
         SetPosition(ConstrainToWalkable(start, rb.position));
     }
 
-    // Painted tiles are the playable area. Falls back to single-axis motion so running into
-    // an edge slides along it instead of sticking.
+    // Shared with zombies, so both obey the map the same way.
     private Vector2 ConstrainToWalkable(Vector2 from, Vector2 to)
     {
-        if (WalkableMap.Instance == null || CanStandAt(to))
+        if (WalkableMap.Instance == null)
             return to;
 
-        // Already out of bounds (e.g. spawned off-map): do not trap them there.
-        if (!CanStandAt(from))
-            return to;
-
-        Vector2 xOnly = new Vector2(to.x, from.y);
-        if (CanStandAt(xOnly))
-            return xOnly;
-
-        Vector2 yOnly = new Vector2(from.x, to.y);
-        if (CanStandAt(yOnly))
-            return yOnly;
-
-        return from;
-    }
-
-    // Samples the footprint, not just the centre, so you cannot stand half over the void.
-    // Deliberately smaller than the collider so a one-tile-wide gap stays passable.
-    private bool CanStandAt(Vector2 position)
-    {
-        WalkableMap map = WalkableMap.Instance;
-        if (map == null)
-            return true;
-
-        return map.IsWalkable(position)
-            && map.IsWalkable(position + new Vector2(footprintRadius, 0f))
-            && map.IsWalkable(position + new Vector2(-footprintRadius, 0f))
-            && map.IsWalkable(position + new Vector2(0f, footprintRadius))
-            && map.IsWalkable(position + new Vector2(0f, -footprintRadius));
+        return WalkableMap.Instance.ConstrainMove(from, to, footprintRadius);
     }
 
     // Two players wedged inside each other can never escape by sweeping, because every
@@ -167,11 +139,6 @@ public class PlayerController : MonoBehaviour
     public void Teleport(Vector2 position)
     {
         SetPosition(position);
-    }
-
-    public void SetRotationZ(float degrees)
-    {
-        transform.rotation = Quaternion.Euler(0f, 0f, degrees);
     }
 
     // Body and transform are kept in lockstep: the body is what Cast queries, the transform is
@@ -209,6 +176,7 @@ public class PlayerController : MonoBehaviour
         {
             endPoint = hit.point;
 
+            // TakeDamage is host-gated, so a client's shot is purely a visual tracer.
             ZombieHealth zombie = hit.collider.GetComponent<ZombieHealth>();
             if (zombie != null)
             {

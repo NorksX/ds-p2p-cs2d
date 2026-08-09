@@ -14,6 +14,7 @@ public enum MessageType : byte
     StateUpdate = 21,
     // 22 was StartGame, retired when spawning became roster-driven.
     ShootEvent = 23,  // Broadcast shooting events
+    ZombieState = 24, // Full living-zombie set + wave number, host to clients
     
     // System messages (100+)
     Heartbeat = 100,

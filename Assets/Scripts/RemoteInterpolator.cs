@@ -22,11 +22,11 @@ public class RemoteInterpolator : MonoBehaviour
     private const float MaxBufferAge = 1f;
 
     private readonly List<Snapshot> snapshots = new List<Snapshot>();
-    private PlayerController player;
+    private Rigidbody2D body;
 
     private void Awake()
     {
-        player = GetComponent<PlayerController>();
+        body = GetComponent<Rigidbody2D>();
     }
 
     public void Push(Vector2 position, float rotation)
@@ -50,7 +50,7 @@ public class RemoteInterpolator : MonoBehaviour
             return;
         }
 
-        if (player == null || snapshots.Count == 0)
+        if (snapshots.Count == 0)
             return;
 
         float renderTime = Time.time - RenderDelay;
@@ -83,9 +83,14 @@ public class RemoteInterpolator : MonoBehaviour
         Apply(snapshots[0].position, snapshots[0].rotation);
     }
 
+    // Body and transform together: these objects are collision obstacles for other peers'
+    // sweeps, so moving only the transform would leave everyone querying stale positions.
     private void Apply(Vector2 position, float rotation)
     {
-        player.Teleport(position);
-        player.SetRotationZ(rotation);
+        if (body != null)
+            body.position = position;
+
+        transform.position = new Vector3(position.x, position.y, transform.position.z);
+        transform.rotation = Quaternion.Euler(0f, 0f, rotation);
     }
 }

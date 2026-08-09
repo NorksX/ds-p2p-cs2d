@@ -861,6 +861,7 @@ public class NetworkManager : MonoBehaviour, INetEventListener
             case MessageType.InputCommand:
             case MessageType.StateUpdate:
             case MessageType.ShootEvent:
+            case MessageType.ZombieState:
                 break;
 
             default:

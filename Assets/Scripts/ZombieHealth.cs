@@ -16,8 +16,13 @@ public class ZombieHealth : MonoBehaviour
         UpdateHealthText();
     }
 
+    // Host only. Clients receive health in the zombie state instead of computing it, so a
+    // client cannot kill a zombie that is still alive on the host.
     public void TakeDamage(int amount)
     {
+        if (NetworkManager.Instance != null && !NetworkManager.Instance.IsHost)
+            return;
+
         currentHealth -= amount;
         currentHealth = Mathf.Max(currentHealth, 0);
 
@@ -27,6 +32,12 @@ public class ZombieHealth : MonoBehaviour
         {
             Die();
         }
+    }
+
+    public void SetHealthFromNetwork(int value)
+    {
+        currentHealth = value;
+        UpdateHealthText();
     }
 
     private void UpdateHealthText()

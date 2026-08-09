@@ -1332,6 +1332,60 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1 &806063344
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 806063346}
+  - component: {fileID: 806063345}
+  m_Layer: 0
+  m_Name: ZombieSpawner
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &806063345
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 806063344}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 967ee54d3c39708419a2dabac956e64f, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::ZombieSpawner
+  zombiePrefab: {fileID: 4772750201386254242, guid: 607e35446b3a9ae4985376d8545707de, type: 3}
+  zombiesInFirstWave: 4
+  extraZombiesPerWave: 2
+  delayBeforeFirstWave: 5
+  delayBetweenWaves: 8
+  maxAliveZombies: 40
+  minSpawnDistance: 10
+  maxSpawnDistance: 16
+  placementAttempts: 30
+  spawnFootprintRadius: 0.4
+--- !u!4 &806063346
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 806063344}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &881990748
 GameObject:
   m_ObjectHideFlags: 0
@@ -32151,7 +32205,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: c6fbe3b3afd30b645b3c4c72ded62d91, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::WalkableMap
-  tilemap: {fileID: 0}
+  tilemap: {fileID: 1596301180}
 --- !u!1 &1719114296
 GameObject:
   m_ObjectHideFlags: 0
@@ -32823,3 +32877,4 @@ SceneRoots:
   - {fileID: 2048844408}
   - {fileID: 680763158}
   - {fileID: 404190655}
+  - {fileID: 806063346}

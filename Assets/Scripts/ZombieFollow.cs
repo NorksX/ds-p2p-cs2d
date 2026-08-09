@@ -6,16 +6,25 @@ public class ZombieFollow : MonoBehaviour
     public float attackRange = 1f;
     public float attackCooldown = 1f;
 
+    [Tooltip("Smaller than the collider so one-tile gaps stay passable")]
+    [SerializeField] private float footprintRadius = 0.35f;
+
     private Transform target;
     private PlayerHealth targetHealth; // Cache component
     private float lastAttackTime;
+    private Rigidbody2D body;
 
-    private void Start()
+    private void Awake()
     {
-        // Check for targets every 0.5s instead of every frame
-        InvokeRepeating(nameof(UpdateTarget), 0f, 0.5f);
+        body = GetComponent<Rigidbody2D>();
     }
-    
+
+    // Deliberately no Start-time host check. Migration can hand us authority at any moment,
+    // and a component that latched its role at Start would stay frozen forever afterwards.
+    private const float TargetRefreshInterval = 0.5f;
+    private float nextTargetRefresh;
+
+
     private void UpdateTarget()
     {
         Transform closestEnemy = null;
@@ -67,19 +76,56 @@ public class ZombieFollow : MonoBehaviour
 
     private void Update()
     {
+        // AI runs on the host only; clients receive positions and interpolate them.
+        if (NetworkManager.Instance == null || !NetworkManager.Instance.IsHost)
+            return;
+
+        if (Time.time >= nextTargetRefresh)
+        {
+            nextTargetRefresh = Time.time + TargetRefreshInterval;
+            UpdateTarget();
+        }
+
         if (target == null) return;
 
-        Vector2 dir = target.position - transform.position;
-        float distance = dir.magnitude;
-
-        // Rotate
-        float angle = Mathf.Atan2(dir.y, dir.x) * Mathf.Rad2Deg;
-        transform.rotation = Quaternion.Euler(0, 0, angle);
+        Vector2 toTarget = (Vector2)target.position - (Vector2)transform.position;
+        float distance = toTarget.magnitude;
 
         // Move if not too close
         if (distance > attackRange)
         {
-            transform.position += (Vector3)(dir.normalized * moveSpeed * Time.deltaTime);
+            Vector2 current = transform.position;
+
+            // Follow the shared flow field so walls are routed around rather than pressed
+            // against. Straight-line is only the fallback when no route exists.
+            if (ZombieSpawner.Instance == null ||
+                !ZombieSpawner.Instance.TryGetFlowDirection(current, out Vector2 heading))
+            {
+                heading = toTarget.normalized;
+            }
+
+            Vector2 desired = current + heading * moveSpeed * Time.deltaTime;
+
+            if (WalkableMap.Instance != null)
+                desired = WalkableMap.Instance.ConstrainMove(current, desired, footprintRadius);
+
+            // Face where we are actually going, not through the wall at the player.
+            Vector2 travelled = desired - current;
+            if (travelled.sqrMagnitude > 0.000001f)
+            {
+                float moveAngle = Mathf.Atan2(travelled.y, travelled.x) * Mathf.Rad2Deg;
+                transform.rotation = Quaternion.Euler(0f, 0f, moveAngle);
+            }
+
+            transform.position = new Vector3(desired.x, desired.y, transform.position.z);
+
+            if (body != null)
+                body.position = desired;
+        }
+        else
+        {
+            float angle = Mathf.Atan2(toTarget.y, toTarget.x) * Mathf.Rad2Deg;
+            transform.rotation = Quaternion.Euler(0f, 0f, angle);
         }
 
         // Attack if in range

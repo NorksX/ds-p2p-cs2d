@@ -74,6 +74,8 @@ public static class MessageSerializer
                 return new StateUpdateMessage();
             case MessageType.ShootEvent:
                 return new ShootEventMessage();
+            case MessageType.ZombieState:
+                return new ZombieStateMessage();
             case MessageType.Heartbeat:
                 return new Heartbeat();
             case MessageType.HostFailureDetect:
