@@ -77,6 +77,12 @@ public class PlayerTickSimulation : MonoBehaviour
         if (player == null || buffer == null)
             return;
 
+        // No authority exists mid-migration, so predicting would only build up divergence
+        // that the new host has to undo the moment it takes over.
+        if (NetworkManager.Instance != null
+            && NetworkManager.Instance.State == ConnectionState.HostMigration)
+            return;
+
         if (!buffer.TryGet(tick - 1, out InputCommand cmd))
             return;
 

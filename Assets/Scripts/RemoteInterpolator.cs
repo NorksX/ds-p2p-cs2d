@@ -40,6 +40,16 @@ public class RemoteInterpolator : MonoBehaviour
 
     private void Update()
     {
+        // After a migration this component survives on a peer that has just become host.
+        // The host simulates these players itself, so replaying buffered snapshots on top
+        // fights that authority every frame - it looks like vibration and the player cannot
+        // be moved.
+        if (NetworkManager.Instance != null && NetworkManager.Instance.IsHost)
+        {
+            snapshots.Clear();
+            return;
+        }
+
         if (player == null || snapshots.Count == 0)
             return;
 

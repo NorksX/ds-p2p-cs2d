@@ -33,6 +33,7 @@ public class NetworkManager : MonoBehaviour, INetEventListener
 
     private string currentHostId;
     private int localSpawnSlot = -1;
+    private readonly List<string> meshPeersToDrop = new List<string>();
 
     public bool isHost = false;
 
@@ -297,17 +298,62 @@ public class NetworkManager : MonoBehaviour, INetEventListener
         }
     }
     
+    // Election state
+    private int receivedVotes = 0;
+    private bool isCandidate = false;
+    private Coroutine migrationRoutine;
+
+    private const int MaxElectionRounds = 5;
+
     private void HandleHostFailureDetect(HostFailureDetectMessage message)
     {
-        Debug.Log($"[NetworkManager] Host Failure Detected by {message.reporterId}!");
-        
-        if (state != ConnectionState.HostMigration)
+        if (state == ConnectionState.HostMigration)
+            return;
+
+        Debug.Log($"[HostMigration] Host failure detected by {message.reporterId}, dead host: {currentHostId}");
+
+        state = ConnectionState.HostMigration;
+        receivedVotes = 0;
+        isCandidate = false;
+
+        if (migrationRoutine != null)
+            StopCoroutine(migrationRoutine);
+
+        migrationRoutine = StartCoroutine(RunMigration());
+    }
+
+    // Retries, because a single round can produce no host at all: the best candidate may be
+    // unreachable, or votes may not arrive. Without this the session hangs in HostMigration.
+    private System.Collections.IEnumerator RunMigration()
+    {
+        for (int round = 1; round <= MaxElectionRounds; round++)
         {
-            state = ConnectionState.HostMigration;
-            Debug.Log("[NetworkManager] STATE CHANGED TO: HostMigration");
+            DialSurvivors();
+
+            // Random so candidates do not all broadcast on the same frame.
+            yield return new WaitForSeconds(UnityEngine.Random.Range(0.5f, 1.0f));
+
+            if (state != ConnectionState.HostMigration)
+                yield break;
+
+            StartElection(round);
+
+            yield return new WaitForSeconds(1.5f);
+
+            if (state != ConnectionState.HostMigration)
+                yield break;
+
+            Debug.LogWarning($"[HostMigration] Round {round} produced no host, retrying");
+            receivedVotes = 0;
+            isCandidate = false;
         }
-        
-        // Dial every surviving participant to form a mesh.
+
+        Debug.LogError("[HostMigration] Election failed - no host could be established");
+        LeaveLobby();
+    }
+
+    private void DialSurvivors()
+    {
         foreach (var entry in roster)
         {
             if (entry.playerId == localPlayerId) continue;
@@ -317,121 +363,95 @@ public class NetworkManager : MonoBehaviour, INetEventListener
             Debug.Log($"[HostMigration] Connecting to peer {entry.ipAddress}:{entry.listenPort}");
             netManager.Connect(entry.ipAddress, entry.listenPort, "");
         }
-        
-        // Broadcast failure to anyone we ARE connected to (to spread the word)
-        // SendMessageToAll(message, DeliveryMethod.ReliableOrdered);
-        
-        // Start Election Timer
-        StartCoroutine(ElectionTimer());
     }
-    
-    private System.Collections.IEnumerator ElectionTimer()
-    {
-        // Random delay to avoid collision (0-500ms) + connection time
-        yield return new WaitForSeconds(UnityEngine.Random.Range(0.5f, 1.0f));
-        
-        StartElection();
-    }
-    
-    private void StartElection()
-    {
-        Debug.Log($"[HostMigration] Checking candidacy... My ID: {localPlayerId}");
-        
-        // Logic: Lowest string ID wins
-        bool amIBestCandidate = true;
 
-        Debug.Log($"[HostMigration] Roster size: {roster.Count}, dead host: {currentHostId}");
+    // Candidacy and quorum are judged over peers we actually reached. A roster entry we never
+    // connected to cannot host us, and counting it would put a majority permanently out of
+    // reach - which is how the old version could deadlock.
+    private int CountReachableParticipants()
+    {
+        int count = 1; // ourselves
+
         foreach (var entry in roster)
         {
-             if (entry.playerId == localPlayerId) continue;
-             if (entry.playerId == currentHostId) continue;
+            if (entry.playerId == localPlayerId) continue;
+            if (entry.playerId == currentHostId) continue;
+            if (peers.ContainsKey(entry.playerId)) count++;
+        }
 
-             if (string.Compare(entry.playerId, localPlayerId) < 0)
-             {
-                 Debug.Log($"[HostMigration] Found better candidate: {entry.playerId} < {localPlayerId}");
-                 amIBestCandidate = false;
-                 break;
-             }
-        }
-        
-        if (amIBestCandidate)
-        {
-            Debug.Log("[HostMigration] I AM CANDIDATE! Broadcasting request...");
-            
-            // Broadcast candidacy
-            HostElectionRequest req = new HostElectionRequest(localPlayerId, TickManager.Instance.CurrentTick);
-            
-            // We need to send this to EVERYONE we managed to connect to
-            SendMessageToAll(req, DeliveryMethod.ReliableOrdered);
-            
-            // Vote for self
-            receivedVotes = 1;
-            
-            // Check if we win immediately (e.g. only candidate, or self > threshold)
-            CheckElectionVictory();
-        }
+        return count;
     }
-    
-    // Election State
-    private int receivedVotes = 0;
-    
+
+    private void StartElection(int round)
+    {
+        bool amIBestCandidate = true;
+
+        foreach (var entry in roster)
+        {
+            if (entry.playerId == localPlayerId) continue;
+            if (entry.playerId == currentHostId) continue;
+            if (!peers.ContainsKey(entry.playerId)) continue;
+
+            if (string.CompareOrdinal(entry.playerId, localPlayerId) < 0)
+            {
+                amIBestCandidate = false;
+                break;
+            }
+        }
+
+        Debug.Log($"[HostMigration] Round {round}: reachable={CountReachableParticipants()}, candidate={amIBestCandidate}");
+
+        if (!amIBestCandidate)
+            return;
+
+        isCandidate = true;
+        receivedVotes = 1; // vote for ourselves
+
+        HostElectionRequest req = new HostElectionRequest(localPlayerId, TickManager.Instance.CurrentTick);
+        SendMessageToAll(req, DeliveryMethod.ReliableOrdered);
+
+        CheckElectionVictory();
+    }
+
     private void HandleHostElectionRequest(HostElectionRequest request, NetPeer peer)
     {
-        // Debug.Log($"[HostElection] Received request from {request.candidateId}");
-        
-        // Simple Logic: If their ID is lower than mine, accept.
-        bool isBetter = string.Compare(request.candidateId, localPlayerId) < 0;
-        
-        if (isBetter)
-        {
-             // Debug.Log($"[HostElection] Voting YES for {request.candidateId}");
-        }
-        else
-        {
-             // Debug.Log($"[HostElection] Voting NO for {request.candidateId} (My ID is lower)");
-        }
-        
+        // Ordinal, not culture-sensitive: every peer must reach the same verdict.
+        bool isBetter = string.CompareOrdinal(request.candidateId, localPlayerId) < 0;
+
         HostElectionResponse response = new HostElectionResponse(localPlayerId, request.candidateId, isBetter);
         SendMessage(response, peer, DeliveryMethod.ReliableOrdered);
     }
-    
+
     private void HandleHostElectionResponse(HostElectionResponse response)
     {
-        if (response.accepted && response.candidateId == localPlayerId)
-        {
-            receivedVotes++;
-            // Debug.Log($"[HostElection] Received VOTE from {response.voterId}! Total: {receivedVotes}");
-            CheckElectionVictory();
-        }
+        // Ignore votes when not campaigning, otherwise stale replies leak into a later round.
+        if (!isCandidate || !response.accepted || response.candidateId != localPlayerId)
+            return;
+
+        receivedVotes++;
+        CheckElectionVictory();
     }
-    
+
     private void CheckElectionVictory()
     {
-         // Victory condition: strict majority of surviving participants (dead host excluded).
-         int totalVoters = 0;
-         foreach (var entry in roster)
-         {
-             if (entry.playerId != currentHostId) totalVoters++;
-         }
+        int totalVoters = CountReachableParticipants();
+        int threshold = totalVoters / 2;
 
-         if (totalVoters == 0) totalVoters = 1;
-
-         int threshold = totalVoters / 2;
-         
-         // Debug.Log($"[HostElection] Victory Check: Votes={receivedVotes}, Threshold={threshold}, TotalVoters={totalVoters}");
-         
-         if (receivedVotes > threshold)
-         {
-             Debug.Log(">>> ELECTION WON! I AM THE NEW HOST! <<<");
-             ClaimHostRole();
-         }
+        if (receivedVotes > threshold)
+        {
+            Debug.Log($"[HostMigration] Election won with {receivedVotes}/{totalVoters} votes");
+            ClaimHostRole();
+        }
     }
     
     private void ClaimHostRole()
     {
         Debug.Log("[HostMigration] CLAIMING HOST ROLE...");
-        
+
         string deadHostId = currentHostId;
+
+        isCandidate = false;
+        StopMigrationRoutine();
 
         isHost = true;
         currentHostId = localPlayerId;
@@ -454,11 +474,31 @@ public class NetworkManager : MonoBehaviour, INetEventListener
     
     private void HandleHostClaim(HostClaimMessage message, NetPeer sender)
     {
+        if (message.newHostId == localPlayerId)
+            return;
+
+        // Two peers can claim at once. Ordinal comparison gives every peer the same verdict,
+        // so the lower id always wins and the session cannot split in two.
+        if (isHost)
+        {
+            if (string.CompareOrdinal(message.newHostId, localPlayerId) >= 0)
+            {
+                Debug.Log($"[HostMigration] Ignoring claim from {message.newHostId} - our id wins");
+                return;
+            }
+
+            Debug.LogWarning($"[HostMigration] Standing down for {message.newHostId}");
+            isHost = false;
+        }
+
         Debug.Log($"[HostMigration] Received host claim from {message.newHostId}");
+
+        isCandidate = false;
+        StopMigrationRoutine();
 
         // Drop the dead host, then promote the claimant. Keyed by playerId, so this no
         // longer needs the old re-keying dance against connection-local NetPeer ids.
-        if (!string.IsNullOrEmpty(currentHostId))
+        if (!string.IsNullOrEmpty(currentHostId) && currentHostId != message.newHostId)
             UnregisterPeer(currentHostId);
 
         RosterEntry entry = FindRosterEntry(message.newHostId);
@@ -472,7 +512,39 @@ public class NetworkManager : MonoBehaviour, INetEventListener
         currentHostId = message.newHostId;
         state = ConnectionState.InLobby;
 
+        DropMeshPeers();
+
         Debug.Log($"[HostMigration] Accepted {message.newHostId} as host. Resuming.");
+    }
+
+    // Migration dials everyone into a mesh; once a host exists we go back to a star, so a
+    // later migration starts from a clean slate instead of a half-connected graph.
+    private void DropMeshPeers()
+    {
+        meshPeersToDrop.Clear();
+
+        foreach (var kvp in peers)
+        {
+            if (kvp.Key != currentHostId)
+                meshPeersToDrop.Add(kvp.Key);
+        }
+
+        foreach (string playerId in meshPeersToDrop)
+        {
+            if (peers.TryGetValue(playerId, out PeerInfo info) && info.netPeer != null)
+                info.netPeer.Disconnect();
+
+            UnregisterPeer(playerId);
+        }
+    }
+
+    private void StopMigrationRoutine()
+    {
+        if (migrationRoutine == null)
+            return;
+
+        StopCoroutine(migrationRoutine);
+        migrationRoutine = null;
     }
 
     
@@ -553,6 +625,10 @@ public class NetworkManager : MonoBehaviour, INetEventListener
             netManager.DisconnectAll();
         }
         
+        StopMigrationRoutine();
+        isCandidate = false;
+        receivedVotes = 0;
+
         netManager.Stop();
 
         peers.Clear();
@@ -614,10 +690,12 @@ public class NetworkManager : MonoBehaviour, INetEventListener
                 RegisterPeer(entry.playerId, entry.username, entry.spawnSlot, peer);
                 Debug.Log($"[HostMigration] Mesh peer resolved to {entry.playerId} ({entry.username})");
             }
-            else
-            {
-                Debug.LogWarning($"[HostMigration] No roster entry for {peer.Address}:{peer.Port} - not registering");
-            }
+
+            // Identify ourselves regardless of whether the endpoint matched. Inferring identity
+            // from an address is fragile, and a mesh peer that never registers gets dialled
+            // again every retry round - which is the reconnect spam.
+            JoinLobbyRequest identity = new JoinLobbyRequest(localPlayerId, localPlayerUsername, 0, netManager.LocalPort);
+            SendMessage(identity, peer, DeliveryMethod.ReliableOrdered);
             return;
         }
 
@@ -639,18 +717,12 @@ public class NetworkManager : MonoBehaviour, INetEventListener
             UnregisterPeer(disconnectedPlayerId);
             OnPeerLeft?.Invoke(peerInfo);
 
-            if (PlayerSpawner.Instance != null)
-            {
-                PlayerSpawner.Instance.DespawnPlayer(disconnectedPlayerId);
-            }
-
-            // Drop them from the local roster so they are not a candidate in an election.
-            // ApplyRoster despawns them even on a client, where no host broadcast may follow.
-            roster.RemoveAll(e => e.playerId == disconnectedPlayerId);
-            ApplyRoster();
-
             if (isHost)
             {
+                // The host owns membership, so a lost connection really is a departure.
+                roster.RemoveAll(e => e.playerId == disconnectedPlayerId);
+                ApplyRoster();
+
                 PlayerDisconnectedMessage msg = new PlayerDisconnectedMessage(disconnectedPlayerId);
                 SendMessageToAll(msg, DeliveryMethod.ReliableOrdered);
 
@@ -658,12 +730,22 @@ public class NetworkManager : MonoBehaviour, INetEventListener
                 BroadcastRoster();
                 Debug.Log($"[NetworkManager] Broadcasted disconnect for player {disconnectedPlayerId}");
             }
-
-            if (!isHost && wasHost)
+            else if (wasHost)
             {
                 Debug.LogWarning("[NetworkManager] Host disconnected! Triggering immediate migration.");
+
+                roster.RemoveAll(e => e.playerId == disconnectedPlayerId);
+                ApplyRoster();
+
                 HostFailureDetectMessage failMsg = new HostFailureDetectMessage(localPlayerId, TickManager.Instance.CurrentTick);
                 HandleHostFailureDetect(failMsg);
+            }
+            else
+            {
+                // A mesh link closing is not a departure - it is exactly what DropMeshPeers
+                // does after a migration. Only the host decides who is still in the session,
+                // so leave the roster alone and wait to be told.
+                Debug.Log($"[NetworkManager] Peer link closed: {disconnectedPlayerId} (membership unchanged)");
             }
         }
 
@@ -789,7 +871,26 @@ public class NetworkManager : MonoBehaviour, INetEventListener
     
     private void HandleJoinLobbyRequest(JoinLobbyRequest request, NetPeer peer)
     {
-        if (!isHost) return;
+        if (!isHost)
+        {
+            // During migration this doubles as mesh identification, so a peer counts as
+            // reachable for the election and is not dialled again next round.
+            if (state == ConnectionState.HostMigration && !peers.ContainsKey(request.playerId))
+            {
+                RosterEntry known = FindRosterEntry(request.playerId);
+
+                PeerInfo meshPeer = RegisterPeer(
+                    request.playerId,
+                    request.playerUsername,
+                    known != null ? known.spawnSlot : 0,
+                    peer);
+
+                meshPeer.listenPort = request.listenPort;
+                Debug.Log($"[HostMigration] Mesh peer identified: {request.playerId}");
+            }
+
+            return;
+        }
 
         int slot = AllocateSpawnSlot();
 
