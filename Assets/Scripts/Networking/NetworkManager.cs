@@ -238,7 +238,12 @@ public class NetworkManager : MonoBehaviour, INetEventListener
 
     private void Update()
     {
-        netManager?.PollEvents();
+        // Recompiling during play mode wipes non-serialized fields like this one while Update
+        // keeps running, so never assume it survived.
+        if (netManager == null)
+            return;
+
+        netManager.PollEvents();
 
         // Heartbeat Logic
         if (state != ConnectionState.Disconnected)

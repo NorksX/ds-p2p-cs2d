@@ -5,6 +5,8 @@ public class PlayerController : MonoBehaviour
 {
     [Header("Movement")]
     [SerializeField] private float moveSpeed = 5f;
+    [SerializeField] private LayerMask obstacleMask = 1;
+    [SerializeField] private float footprintRadius = 0.35f;
 
     [Header("Shooting")]
     [SerializeField] private float shootRange = 20f;
@@ -12,22 +14,172 @@ public class PlayerController : MonoBehaviour
     [SerializeField] private GameObject tracerPrefab;
 
     private Rigidbody2D rb;
+    private Collider2D bodyCollider;
+    private ContactFilter2D obstacleFilter;
+    private float separationRadius;
+
+    private readonly RaycastHit2D[] castHits = new RaycastHit2D[8];
+    private readonly Collider2D[] overlapHits = new Collider2D[8];
+
+    // Leaves a sliver of space at contact so the next sweep does not start already touching.
+    private const float Skin = 0.01f;
 
     private void Awake()
     {
         rb = GetComponent<Rigidbody2D>();
+        bodyCollider = GetComponent<Collider2D>();
+
+        obstacleFilter = new ContactFilter2D
+        {
+            useLayerMask = true,
+            layerMask = obstacleMask,
+            useTriggers = false
+        };
+
+        // From the shape, not bounds: bounds are still zero this early in the lifecycle.
+        CircleCollider2D circle = bodyCollider as CircleCollider2D;
+        float scale = Mathf.Max(Mathf.Abs(transform.lossyScale.x), Mathf.Abs(transform.lossyScale.y));
+        separationRadius = (circle != null ? circle.radius * scale : 0.5f) + Skin;
     }
 
-
+    /// <summary>
+    /// One simulation step. Deliberately a pure function of (position, input): it sweeps and
+    /// assigns position itself rather than handing a velocity to the solver, so reconciliation
+    /// can replay it many times in a single frame.
+    /// </summary>
     public void SimulateMovement(Vector2 input)
     {
+        SeparateFromOverlaps();
+
         if (input.sqrMagnitude < 0.0001f)
-        {
-            rb.linearVelocity = Vector2.zero;
             return;
+
+        float dt = TickManager.Instance != null ? TickManager.Instance.TickInterval : 1f / 30f;
+        Move(input.normalized * moveSpeed * dt);
+    }
+
+    // Players block each other like walls, but never push each other: each resolves only its
+    // own movement, treating everyone else as static. Nothing is displaced, so two machines
+    // have no shared solver outcome to disagree about.
+    private void Move(Vector2 delta)
+    {
+        Vector2 start = rb.position;
+
+        // Travel, then spend whatever is left sliding along the surface that stopped us.
+        for (int pass = 0; pass < 2; pass++)
+        {
+            float distance = delta.magnitude;
+            if (distance < 0.00001f)
+                break;
+
+            Vector2 dir = delta / distance;
+            int count = rb.Cast(dir, obstacleFilter, castHits, distance + Skin);
+
+            if (count == 0)
+            {
+                // rb.Cast sweeps from the body's current position, so commit before re-casting.
+                SetPosition(rb.position + delta);
+                break;
+            }
+
+            RaycastHit2D nearest = castHits[0];
+            for (int i = 1; i < count; i++)
+            {
+                if (castHits[i].distance < nearest.distance)
+                    nearest = castHits[i];
+            }
+
+            float travel = Mathf.Max(0f, nearest.distance - Skin);
+            SetPosition(rb.position + dir * travel);
+
+            Vector2 remaining = dir * (distance - travel);
+            delta = remaining - Vector2.Dot(remaining, nearest.normal) * nearest.normal;
         }
 
-        rb.linearVelocity = input.normalized * moveSpeed;
+        SetPosition(ConstrainToWalkable(start, rb.position));
+    }
+
+    // Painted tiles are the playable area. Falls back to single-axis motion so running into
+    // an edge slides along it instead of sticking.
+    private Vector2 ConstrainToWalkable(Vector2 from, Vector2 to)
+    {
+        if (WalkableMap.Instance == null || CanStandAt(to))
+            return to;
+
+        // Already out of bounds (e.g. spawned off-map): do not trap them there.
+        if (!CanStandAt(from))
+            return to;
+
+        Vector2 xOnly = new Vector2(to.x, from.y);
+        if (CanStandAt(xOnly))
+            return xOnly;
+
+        Vector2 yOnly = new Vector2(from.x, to.y);
+        if (CanStandAt(yOnly))
+            return yOnly;
+
+        return from;
+    }
+
+    // Samples the footprint, not just the centre, so you cannot stand half over the void.
+    // Deliberately smaller than the collider so a one-tile-wide gap stays passable.
+    private bool CanStandAt(Vector2 position)
+    {
+        WalkableMap map = WalkableMap.Instance;
+        if (map == null)
+            return true;
+
+        return map.IsWalkable(position)
+            && map.IsWalkable(position + new Vector2(footprintRadius, 0f))
+            && map.IsWalkable(position + new Vector2(-footprintRadius, 0f))
+            && map.IsWalkable(position + new Vector2(0f, footprintRadius))
+            && map.IsWalkable(position + new Vector2(0f, -footprintRadius));
+    }
+
+    // Two players wedged inside each other can never escape by sweeping, because every
+    // direction is blocked. Push apart first so movement always has somewhere to go.
+    private void SeparateFromOverlaps()
+    {
+        if (bodyCollider == null)
+            return;
+
+        int count = Physics2D.OverlapCircle(rb.position, separationRadius, obstacleFilter, overlapHits);
+
+        for (int i = 0; i < count; i++)
+        {
+            if (overlapHits[i] == bodyCollider)
+                continue;
+
+            ColliderDistance2D separation = bodyCollider.Distance(overlapHits[i]);
+
+            // distance is negative while overlapping, so this moves us away from the normal.
+            if (separation.isOverlapped)
+                SetPosition(rb.position + separation.normal * separation.distance);
+        }
+    }
+
+    public Vector2 Position => rb != null ? rb.position : (Vector2)transform.position;
+
+    /// <summary>
+    /// Move without sweeping. Used when applying authoritative state, where the position is
+    /// already correct by definition and must not be re-resolved against local obstacles.
+    /// </summary>
+    public void Teleport(Vector2 position)
+    {
+        SetPosition(position);
+    }
+
+    public void SetRotationZ(float degrees)
+    {
+        transform.rotation = Quaternion.Euler(0f, 0f, degrees);
+    }
+
+    // Body and transform are kept in lockstep: the body is what Cast queries, the transform is
+    // what the camera, state broadcast and shooting all read.
+    private void SetPosition(Vector2 position)
+    {
+        rb.position = position;
+        transform.position = new Vector3(position.x, position.y, transform.position.z);
     }
 
 

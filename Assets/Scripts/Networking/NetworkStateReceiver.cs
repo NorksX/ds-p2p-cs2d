@@ -46,15 +46,36 @@ public class NetworkStateReceiver : MonoBehaviour
         foreach (var playerState in stateMsg.playerStates)
         {
             NetworkedPlayer networkedPlayer = PlayerSpawner.Instance.GetPlayer(playerState.playerId);
-            
-            if (networkedPlayer != null && !networkedPlayer.isLocalPlayer)
+
+            if (networkedPlayer == null)
+                continue;
+
+            if (networkedPlayer.isLocalPlayer)
+            {
+                // Our own position IS corrected now - it used to be skipped entirely, which is
+                // why local prediction drifted from the host permanently.
+                PlayerTickSimulation simulation = networkedPlayer.GetComponent<PlayerTickSimulation>();
+
+                if (simulation != null)
+                    simulation.ApplyAuthoritativeState(playerState.lastProcessedInputTick, playerState.position);
+
+                continue;
+            }
+
+            // Remote players are buffered and played back slightly late, rather than snapped.
+            RemoteInterpolator interpolator = networkedPlayer.GetComponent<RemoteInterpolator>();
+
+            if (interpolator != null)
+            {
+                interpolator.Push(playerState.position, playerState.rotation);
+            }
+            else
             {
                 networkedPlayer.transform.position = new Vector3(
                     playerState.position.x,
                     playerState.position.y,
-                    networkedPlayer.transform.position.z
-                );
-                
+                    networkedPlayer.transform.position.z);
+
                 networkedPlayer.transform.rotation = Quaternion.Euler(0, 0, playerState.rotation);
             }
         }

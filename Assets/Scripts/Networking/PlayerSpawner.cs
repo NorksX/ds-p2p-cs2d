@@ -79,6 +79,10 @@ public class PlayerSpawner : MonoBehaviour
 
         StripInputFrom(playerObj);
 
+        // Remote players are played back from a snapshot buffer instead of being snapped.
+        if (playerObj.GetComponent<RemoteInterpolator>() == null)
+            playerObj.AddComponent<RemoteInterpolator>();
+
         NetworkedPlayer networkedPlayer = playerObj.GetComponent<NetworkedPlayer>();
         if (networkedPlayer == null)
             networkedPlayer = playerObj.AddComponent<NetworkedPlayer>();

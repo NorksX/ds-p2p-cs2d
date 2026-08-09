@@ -1,10 +1,30 @@
 using UnityEngine;
 using System.Collections;
+using System.Collections.Generic;
 
+/// <summary>
+/// Simulates the local player every tick (prediction) and reconciles against the host.
+///
+/// The host acks the last input tick it simulated, expressed in THIS client's tick numbering,
+/// so reconciliation rewinds to that tick, snaps to the authoritative position, and replays
+/// every input made since. When the prediction was right the replay lands where we already
+/// were and nothing visibly moves.
+/// </summary>
 public class PlayerTickSimulation : MonoBehaviour
 {
     [SerializeField] private PlayerController player;
     [SerializeField] private LocalInputBuffer buffer;
+
+    [Header("Reconciliation")]
+    [Tooltip("Prediction error below this is accepted as correct, to avoid replaying constantly")]
+    [SerializeField] private float positionTolerance = 0.05f;
+
+    private const int MaxHistoryTicks = 240;
+
+    private readonly Dictionary<int, Vector2> predictedPositions = new Dictionary<int, Vector2>();
+    private int oldestRecordedTick;
+    private int lastSimulatedTick = -1;
+    private bool isLocal;
 
     private void Awake()
     {
@@ -20,13 +40,12 @@ public class PlayerTickSimulation : MonoBehaviour
     {
         StartCoroutine(InitializeAfterSpawn());
     }
-    
-    private System.Collections.IEnumerator InitializeAfterSpawn()
+
+    private IEnumerator InitializeAfterSpawn()
     {
         // Wait one frame to ensure PlayerSpawner has set isLocalPlayer
         yield return null;
-        
-        // Disable tick simulation on remote players (they are updated by network state)
+
         NetworkedPlayer networkedPlayer = GetComponent<NetworkedPlayer>();
         if (networkedPlayer != null && !networkedPlayer.isLocalPlayer)
         {
@@ -34,7 +53,8 @@ public class PlayerTickSimulation : MonoBehaviour
             this.enabled = false;
             yield break;
         }
-        
+
+        isLocal = true;
         Debug.Log("[PlayerTickSimulation] Start() - Enabled for LOCAL player");
 
         if (TickManager.Instance == null)
@@ -54,35 +74,95 @@ public class PlayerTickSimulation : MonoBehaviour
 
     private void HandleTick(int tick)
     {
-        // Redundant check removed. Start() ensures this component is disabled for remote players.
-
         if (player == null || buffer == null)
             return;
 
         if (!buffer.TryGet(tick - 1, out InputCommand cmd))
             return;
 
-
         player.SimulateMovement(cmd.move);
         player.SimulateLook(cmd.aimDir);
-        // Debug.Log($"Sim tick {tick}, move={cmd.move}");
+
+        Record(cmd.tick, player.Position);
+        lastSimulatedTick = cmd.tick;
 
         if (cmd.firePressed)
         {
             player.SimulateShoot(cmd.aimDir);
-            
-            // If we're the host, broadcast shoot event to all clients
+
+            // Host broadcasts its own shots; clients let the host author theirs.
             if (NetworkManager.Instance != null && NetworkManager.Instance.IsHost)
             {
                 NetworkedPlayer np = GetComponent<NetworkedPlayer>();
                 if (np != null)
                 {
-                    Vector2 shootOrigin = transform.position;
-                    ShootEventMessage shootMsg = new ShootEventMessage(np.playerId, shootOrigin, cmd.aimDir);
+                    ShootEventMessage shootMsg = new ShootEventMessage(np.playerId, player.Position, cmd.aimDir);
                     NetworkManager.Instance.SendMessageToAll(shootMsg, LiteNetLib.DeliveryMethod.ReliableOrdered);
-                    // Debug.Log($"[PlayerTickSimulation] Host broadcasted own shoot event");
                 }
             }
+        }
+    }
+
+    /// <summary>
+    /// Apply the host's authoritative position for this player, replaying any inputs the host
+    /// had not yet seen. Called only on clients - the host is already the authority.
+    /// </summary>
+    public void ApplyAuthoritativeState(int ackTick, Vector2 authoritativePosition)
+    {
+        if (!isLocal || player == null)
+            return;
+
+        // Nothing acked yet, or we have no record that far back: accept authority outright.
+        if (ackTick <= 0 || !predictedPositions.TryGetValue(ackTick, out Vector2 predicted))
+        {
+            player.Teleport(authoritativePosition);
+            ForgetThrough(ackTick);
+            return;
+        }
+
+        if ((predicted - authoritativePosition).sqrMagnitude <= positionTolerance * positionTolerance)
+        {
+            ForgetThrough(ackTick);
+            return;
+        }
+
+        // Rewind, then replay everything the host had not processed at that point.
+        player.Teleport(authoritativePosition);
+        Record(ackTick, authoritativePosition);
+
+        for (int tick = ackTick + 1; tick <= lastSimulatedTick; tick++)
+        {
+            if (!buffer.TryGet(tick, out InputCommand cmd))
+                continue;
+
+            // Movement only: shots are host-authoritative and must not fire twice.
+            player.SimulateMovement(cmd.move);
+            player.SimulateLook(cmd.aimDir);
+            Record(tick, player.Position);
+        }
+
+        ForgetThrough(ackTick);
+    }
+
+    private void Record(int tick, Vector2 position)
+    {
+        if (predictedPositions.Count == 0)
+            oldestRecordedTick = tick;
+
+        predictedPositions[tick] = position;
+
+        // The host never receives acks for itself, so nothing would ever prune this.
+        if (tick - oldestRecordedTick > MaxHistoryTicks)
+            ForgetThrough(tick - MaxHistoryTicks);
+    }
+
+    // Ticks at or below the ack are settled, so their predictions are no longer needed.
+    private void ForgetThrough(int tick)
+    {
+        while (oldestRecordedTick < tick && predictedPositions.Count > 0)
+        {
+            predictedPositions.Remove(oldestRecordedTick);
+            oldestRecordedTick++;
         }
     }
 }

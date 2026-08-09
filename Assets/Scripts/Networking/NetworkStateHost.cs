@@ -13,6 +13,10 @@ public class NetworkStateHost : MonoBehaviour
     private int ticksSinceLastUpdate = 0;
     // Queue-based input processing: store ALL inputs that arrive between ticks
     private Dictionary<string, List<InputCommand>> receivedInputs = new Dictionary<string, List<InputCommand>>();
+
+    // Highest input tick already simulated per player, so nothing is applied twice.
+    private Dictionary<string, int> lastProcessedTick = new Dictionary<string, int>();
+    private readonly List<string> departedPlayers = new List<string>();
     
     private void Start()
     {
@@ -123,41 +127,40 @@ public class NetworkStateHost : MonoBehaviour
                 continue;
             }
             
-            // CRITICAL INSIGHT: SimulateMovement() sets velocity INSTANTLY
-            // Processing all inputs in one frame means only the LAST one has effect
-            // Solution: Use LAST movement/aim, but process ALL fire inputs
-            
-            if (inputQueue.Count > 0)
+            // Every input is one discrete tick of movement, so all of them must be applied in
+            // order. Applying only the last one silently drops distance whenever two arrive in
+            // the same host tick, and the client - which simulated both - is never corrected.
+            inputQueue.Sort((a, b) => a.tick.CompareTo(b.tick));
+
+            lastProcessedTick.TryGetValue(playerId, out int processedThrough);
+
+            foreach (InputCommand input in inputQueue)
             {
-                // Get the most recent input for movement and aim
-                InputCommand lastInput = inputQueue[inputQueue.Count - 1];
-                
-                // Apply movement and look from LAST input
-                networkedPlayer.playerController.SimulateMovement(lastInput.move);
-                networkedPlayer.playerController.SimulateLook(lastInput.aimDir);
-                
-                // Debug.Log($"[NetworkStateHost] Applied LAST input from {playerId}, move={lastInput.move}, aimDir={lastInput.aimDir}");
-                
-                // Process ALL fire inputs (each shot matters!)
-                foreach (InputCommand input in inputQueue)
+                // Guards against duplicates and late stragglers replaying old movement.
+                if (input.tick <= processedThrough)
+                    continue;
+
+                networkedPlayer.playerController.SimulateMovement(input.move);
+                networkedPlayer.playerController.SimulateLook(input.aimDir);
+
+                if (input.firePressed)
                 {
-                    if (input.firePressed)
-                    {
-                        // Execute shooting locally on host
-                        networkedPlayer.playerController.SimulateShoot(input.aimDir);
-                        
-                        // Broadcast shoot event to ALL clients
-                        Vector2 shootOrigin = networkedPlayer.transform.position;
-                        ShootEventMessage shootMsg = new ShootEventMessage(playerId, shootOrigin, input.aimDir);
-                        NetworkManager.Instance.SendMessageToAll(shootMsg, LiteNetLib.DeliveryMethod.ReliableOrdered);
-                        
-                        // Debug.Log($"[NetworkStateHost] Broadcast shoot event from {playerId}");
-                    }
+                    networkedPlayer.playerController.SimulateShoot(input.aimDir);
+
+                    // Origin is read after the step, so the shot leaves from where they were.
+                    Vector2 shootOrigin = networkedPlayer.transform.position;
+                    ShootEventMessage shootMsg = new ShootEventMessage(playerId, shootOrigin, input.aimDir);
+                    NetworkManager.Instance.SendMessageToAll(shootMsg, LiteNetLib.DeliveryMethod.ReliableOrdered);
                 }
-                
+
+                processedThrough = input.tick;
                 totalInputsProcessed++;
             }
+
+            lastProcessedTick[playerId] = processedThrough;
         }
+
+        PruneDepartedPlayers();
         
         // Debug.Log($"[NetworkStateHost] Processed inputs for {totalInputsProcessed} players this tick");
         
@@ -165,6 +168,25 @@ public class NetworkStateHost : MonoBehaviour
         receivedInputs.Clear();
     }
     
+    // Otherwise a rejoining player, whose tick counter restarts low, would have all of its
+    // input rejected as stale by the entry left behind from its previous session.
+    private void PruneDepartedPlayers()
+    {
+        if (lastProcessedTick.Count == 0)
+            return;
+
+        departedPlayers.Clear();
+
+        foreach (var kvp in lastProcessedTick)
+        {
+            if (PlayerSpawner.Instance.GetPlayer(kvp.Key) == null)
+                departedPlayers.Add(kvp.Key);
+        }
+
+        foreach (string playerId in departedPlayers)
+            lastProcessedTick.Remove(playerId);
+    }
+
     private void BroadcastStateUpdate(int tick)
     {
         if (PlayerSpawner.Instance == null)
@@ -184,13 +206,15 @@ public class NetworkStateHost : MonoBehaviour
             if (networkedPlayer != null)
             {
                 Transform playerTransform = networkedPlayer.transform;
-                
+                lastProcessedTick.TryGetValue(networkedPlayer.playerId, out int ackTick);
+
                 PlayerState state = new PlayerState(
                     networkedPlayer.playerId,
                     playerTransform.position,
-                    playerTransform.rotation.eulerAngles.z
+                    playerTransform.rotation.eulerAngles.z,
+                    ackTick
                 );
-                
+
                 playerStates.Add(state);
             }
         }

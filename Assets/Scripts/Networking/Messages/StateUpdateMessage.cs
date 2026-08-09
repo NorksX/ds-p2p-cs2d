@@ -11,12 +11,17 @@ public struct PlayerState
     public string playerId;
     public Vector2 position;
     public float rotation; // Z-axis rotation in degrees
-    
-    public PlayerState(string playerId, Vector2 position, float rotation)
+
+    // Last input tick the host simulated for this player, in that player's own tick
+    // numbering. This is what a client rewinds to before replaying.
+    public int lastProcessedInputTick;
+
+    public PlayerState(string playerId, Vector2 position, float rotation, int lastProcessedInputTick)
     {
         this.playerId = playerId;
         this.position = position;
         this.rotation = rotation;
+        this.lastProcessedInputTick = lastProcessedInputTick;
     }
 }
 
@@ -49,6 +54,7 @@ public class StateUpdateMessage : INetworkMessage
             writer.Write(state.position.x);
             writer.Write(state.position.y);
             writer.Write(state.rotation);
+            writer.Write(state.lastProcessedInputTick);
         }
     }
     
@@ -65,8 +71,9 @@ public class StateUpdateMessage : INetworkMessage
             float x = reader.ReadSingle();
             float y = reader.ReadSingle();
             float rotation = reader.ReadSingle();
-            
-            playerStates.Add(new PlayerState(playerId, new Vector2(x, y), rotation));
+            int ackTick = reader.ReadInt32();
+
+            playerStates.Add(new PlayerState(playerId, new Vector2(x, y), rotation, ackTick));
         }
     }
 }

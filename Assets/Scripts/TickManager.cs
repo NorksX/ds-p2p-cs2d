@@ -11,7 +11,10 @@ public class TickManager : MonoBehaviour
 
     public int CurrentTick { get; private set; }
 
-    public event Action<int> OnTick; 
+    // Fixed step every tick-driven simulation uses, so movement is resolution independent.
+    public float TickInterval => 1f / Mathf.Max(1, tickRate);
+
+    public event Action<int> OnTick;
 
     private float tickInterval;
     private float accumulatedTime;

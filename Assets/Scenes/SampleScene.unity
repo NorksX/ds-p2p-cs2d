@@ -1122,7 +1122,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 073797afb82c5a1438f328866b10b3f0, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  m_ComponentVersion: 2
+  m_ComponentVersion: 3
   m_LightType: 4
   m_BlendStyleIndex: 0
   m_FalloffIntensity: 0.5
@@ -1765,6 +1765,7 @@ MonoBehaviour:
   config: {fileID: 11400000, guid: eda389bf916003d4ab233efed56fe169, type: 2}
   localPlayerId: 
   localPlayerUsername: Player1
+  isHost: 0
 --- !u!4 &1030700544
 Transform:
   m_ObjectHideFlags: 0
@@ -2291,6 +2292,7 @@ GameObject:
   - component: {fileID: 1596301178}
   - component: {fileID: 1596301180}
   - component: {fileID: 1596301179}
+  - component: {fileID: 1596301181}
   m_Layer: 0
   m_Name: Tilemap_map
   m_TagString: Untagged
@@ -32137,6 +32139,19 @@ Tilemap:
     e31: 0
     e32: 0
     e33: 1
+--- !u!114 &1596301181
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1596301177}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: c6fbe3b3afd30b645b3c4c72ded62d91, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::WalkableMap
+  tilemap: {fileID: 0}
 --- !u!1 &1719114296
 GameObject:
   m_ObjectHideFlags: 0
