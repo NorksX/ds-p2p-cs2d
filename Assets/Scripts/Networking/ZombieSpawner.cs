@@ -115,8 +115,16 @@ public class ZombieSpawner : MonoBehaviour
 
         foreach (var kvp in PlayerSpawner.Instance.GetAllPlayers())
         {
-            if (kvp.Value != null)
-                flowSources.Add(kvp.Value.transform.position);
+            if (kvp.Value == null)
+                continue;
+
+            // Dead players must not seed the field, or it keeps pointing at the corpse while
+            // targeting has already moved on - the zombie then flips between the two each frame.
+            PlayerHealth health = kvp.Value.GetComponent<PlayerHealth>();
+            if (health != null && health.IsDead)
+                continue;
+
+            flowSources.Add(kvp.Value.transform.position);
         }
 
         flowField.Rebuild(WalkableMap.Instance, flowSources);
