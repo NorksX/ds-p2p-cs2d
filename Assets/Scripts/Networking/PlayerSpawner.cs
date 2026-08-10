@@ -180,7 +180,7 @@ public class PlayerSpawner : MonoBehaviour
         return spawnedPlayers;
     }
     
-    private Vector3 GetSpawnPosition(int playerPosition)
+    public Vector3 GetSpawnPosition(int playerPosition)
     {
         if (spawnPoints != null && spawnPoints.Length > 0 && playerPosition < spawnPoints.Length)
         {

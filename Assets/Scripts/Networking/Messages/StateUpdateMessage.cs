@@ -16,12 +16,16 @@ public struct PlayerState
     // numbering. This is what a client rewinds to before replaying.
     public int lastProcessedInputTick;
 
-    public PlayerState(string playerId, Vector2 position, float rotation, int lastProcessedInputTick)
+    // Authoritative, never predicted: health is not a function of local input.
+    public int health;
+
+    public PlayerState(string playerId, Vector2 position, float rotation, int lastProcessedInputTick, int health)
     {
         this.playerId = playerId;
         this.position = position;
         this.rotation = rotation;
         this.lastProcessedInputTick = lastProcessedInputTick;
+        this.health = health;
     }
 }
 
@@ -55,6 +59,7 @@ public class StateUpdateMessage : INetworkMessage
             writer.Write(state.position.y);
             writer.Write(state.rotation);
             writer.Write(state.lastProcessedInputTick);
+            writer.Write(state.health);
         }
     }
     
@@ -72,8 +77,9 @@ public class StateUpdateMessage : INetworkMessage
             float y = reader.ReadSingle();
             float rotation = reader.ReadSingle();
             int ackTick = reader.ReadInt32();
+            int health = reader.ReadInt32();
 
-            playerStates.Add(new PlayerState(playerId, new Vector2(x, y), rotation, ackTick));
+            playerStates.Add(new PlayerState(playerId, new Vector2(x, y), rotation, ackTick, health));
         }
     }
 }

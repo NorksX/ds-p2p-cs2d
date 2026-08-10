@@ -134,11 +134,22 @@ public class NetworkStateHost : MonoBehaviour
 
             lastProcessedTick.TryGetValue(playerId, out int processedThrough);
 
+            PlayerHealth health = networkedPlayer.GetComponent<PlayerHealth>();
+            bool isDead = health != null && health.IsDead;
+
             foreach (InputCommand input in inputQueue)
             {
                 // Guards against duplicates and late stragglers replaying old movement.
                 if (input.tick <= processedThrough)
                     continue;
+
+                // Dead players still advance the ack, so their client keeps reconciling
+                // cleanly instead of piling up unacknowledged input while waiting to respawn.
+                if (isDead)
+                {
+                    processedThrough = input.tick;
+                    continue;
+                }
 
                 networkedPlayer.playerController.SimulateMovement(input.move);
                 networkedPlayer.playerController.SimulateLook(input.aimDir);
@@ -208,11 +219,14 @@ public class NetworkStateHost : MonoBehaviour
                 Transform playerTransform = networkedPlayer.transform;
                 lastProcessedTick.TryGetValue(networkedPlayer.playerId, out int ackTick);
 
+                PlayerHealth health = networkedPlayer.GetComponent<PlayerHealth>();
+
                 PlayerState state = new PlayerState(
                     networkedPlayer.playerId,
                     playerTransform.position,
                     playerTransform.rotation.eulerAngles.z,
-                    ackTick
+                    ackTick,
+                    health != null ? health.currentHealth : 0
                 );
 
                 playerStates.Add(state);

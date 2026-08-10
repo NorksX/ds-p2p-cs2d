@@ -50,6 +50,11 @@ public class NetworkStateReceiver : MonoBehaviour
             if (networkedPlayer == null)
                 continue;
 
+            // Health is authoritative for everyone, including ourselves - it is never predicted.
+            PlayerHealth health = networkedPlayer.GetComponent<PlayerHealth>();
+            if (health != null)
+                health.SetHealthFromNetwork(playerState.health);
+
             if (networkedPlayer.isLocalPlayer)
             {
                 // Our own position IS corrected now - it used to be skipped entirely, which is

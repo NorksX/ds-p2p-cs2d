@@ -26,6 +26,8 @@ public class PlayerTickSimulation : MonoBehaviour
     private int lastSimulatedTick = -1;
     private bool isLocal;
 
+    private PlayerHealth health;
+
     private void Awake()
     {
         if (player == null)
@@ -33,6 +35,8 @@ public class PlayerTickSimulation : MonoBehaviour
 
         if (buffer == null)
             buffer = GetComponent<LocalInputBuffer>();
+
+        health = GetComponent<PlayerHealth>();
     }
 
     // IMPORTANT: subscribe in Start, not OnEnable
@@ -81,6 +85,11 @@ public class PlayerTickSimulation : MonoBehaviour
         // that the new host has to undo the moment it takes over.
         if (NetworkManager.Instance != null
             && NetworkManager.Instance.State == ConnectionState.HostMigration)
+            return;
+
+        // The host ignores a dead player's input, so predicting movement would just be
+        // corrected away every snapshot.
+        if (health != null && health.IsDead)
             return;
 
         if (!buffer.TryGet(tick - 1, out InputCommand cmd))
