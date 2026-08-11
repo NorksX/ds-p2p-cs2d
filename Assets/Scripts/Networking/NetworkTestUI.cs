@@ -13,6 +13,14 @@ public class NetworkTestUI : MonoBehaviour
     [Header("UI Elements")]
     [SerializeField] private TMP_Text statusText;
     [SerializeField] private TMP_InputField hostAddressInput;
+
+    [Tooltip("Used when the address field has no explicit :port")]
+    [SerializeField] private int defaultPort = 7777;
+
+    [Tooltip("Port to host on. Leave empty for the default.")]
+    [SerializeField] private TMP_InputField hostPortInput;
+
+    [SerializeField] private ServerBrowserUI serverBrowser;
     
     private void Start()
     {
@@ -95,40 +103,82 @@ public class NetworkTestUI : MonoBehaviour
     
     public void OnHostButtonClicked()
     {
-        if (NetworkManager.Instance != null)
-        {
-            bool success = NetworkManager.Instance.HostLobby();
-            
-            if (success)
-            {
-                Debug.Log("Hosting lobby!");
-                ShowLobbyPanel();
-            }
-        }
-        else
+        if (NetworkManager.Instance == null)
         {
             Debug.LogError("NetworkManager not found!");
+            return;
+        }
+
+        int port = defaultPort;
+
+        // Lets one machine host several instances - the second cannot reuse the first's port.
+        if (hostPortInput != null && !string.IsNullOrWhiteSpace(hostPortInput.text))
+        {
+            if (!int.TryParse(hostPortInput.text.Trim(), out port) || port <= 0 || port > 65535)
+            {
+                Debug.LogWarning($"[NetworkTestUI] '{hostPortInput.text}' is not a valid port");
+                return;
+            }
+        }
+
+        if (NetworkManager.Instance.HostLobby(port))
+        {
+            Debug.Log($"Hosting lobby on {port}!");
+            ShowLobbyPanel();
         }
     }
     
+    /// <summary>Join button now opens the browser rather than dialling a guessed endpoint.</summary>
+    public void OnOpenServerBrowserClicked()
+    {
+        if (serverBrowser != null)
+            serverBrowser.Open();
+        else
+            OnJoinButtonClicked();
+    }
+
     public void OnJoinButtonClicked()
     {
-        if (NetworkManager.Instance != null)
+        if (NetworkManager.Instance == null)
         {
-            string address = hostAddressInput?.text ?? "127.0.0.1";
-            bool success = NetworkManager.Instance.JoinLobby(address, 7777);
-            
-            if (success)
-            {
-                Debug.Log($"Connecting to {address}:7777...");
-                // Don't switch UI yet! Wait for connection to actually happen or set a "Connecting..." state
-                // But for simplicity, we switch, and if it fails, CheckConnectionState will revert it
-                ShowLobbyPanel(); 
-            }
+            Debug.LogError("NetworkManager not found!");
+            return;
+        }
+
+        ParseEndpoint(hostAddressInput?.text, out string address, out int port);
+
+        bool success = NetworkManager.Instance.JoinLobby(address, port);
+
+        if (success)
+        {
+            Debug.Log($"Connecting to {address}:{port}...");
+            // Don't switch UI yet! Wait for connection to actually happen or set a "Connecting..." state
+            // But for simplicity, we switch, and if it fails, CheckConnectionState will revert it
+            ShowLobbyPanel();
+        }
+    }
+
+    // Accepts "ip" or "ip:port". Typing the port matters over a Hamachi-style virtual LAN,
+    // where broadcast discovery is unreliable.
+    private void ParseEndpoint(string raw, out string address, out int port)
+    {
+        address = string.IsNullOrWhiteSpace(raw) ? "127.0.0.1" : raw.Trim();
+        port = defaultPort;
+
+        int separator = address.LastIndexOf(':');
+        if (separator <= 0)
+            return;
+
+        string portText = address.Substring(separator + 1);
+
+        if (int.TryParse(portText, out int parsed) && parsed > 0 && parsed <= 65535)
+        {
+            port = parsed;
+            address = address.Substring(0, separator);
         }
         else
         {
-            Debug.LogError("NetworkManager not found!");
+            Debug.LogWarning($"[NetworkTestUI] Could not read a port from '{raw}', using {defaultPort}");
         }
     }
     
@@ -151,17 +201,20 @@ public class NetworkTestUI : MonoBehaviour
     {
         if (statusText == null || NetworkManager.Instance == null)
             return;
-        
+
         string status = $"State: {NetworkManager.Instance.State}\n";
         status += $"Role: {(NetworkManager.Instance.IsHost ? "HOST" : "CLIENT")}\n";
         status += $"Connected Peers: {NetworkManager.Instance.ConnectedPeers.Count}";
-        
+
+        if (NetworkManager.Instance.IsHost)
+            status += $"\nHosting on port {NetworkManager.Instance.LocalPort}";
+
         // Add a prominent warning if host with no peers
         if (NetworkManager.Instance.IsHost && NetworkManager.Instance.ConnectedPeers.Count == 0)
         {
             status += "\n\nWAITING FOR PLAYERS...";
         }
-        
+
         statusText.text = status;
     }
 }

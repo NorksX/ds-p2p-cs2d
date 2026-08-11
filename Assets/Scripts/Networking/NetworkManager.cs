@@ -51,6 +51,11 @@ public class NetworkManager : MonoBehaviour, INetEventListener
     public IReadOnlyDictionary<string, PeerInfo> ConnectedPeers => peers;
     public IReadOnlyList<RosterEntry> Roster => roster;
 
+    // The port actually bound, which after a migration is the ephemeral one this peer took as
+    // a client - not config.gamePort. Discovery advertises this.
+    public int LocalPort => netManager != null ? netManager.LocalPort : 0;
+    public int MaxPlayers => config != null ? config.maxPlayers : 4;
+
 //peer table
 
     private PeerInfo RegisterPeer(string playerId, string username, int spawnSlot, NetPeer peer)
@@ -231,6 +236,7 @@ public class NetworkManager : MonoBehaviour, INetEventListener
 
     private float lastHeartbeatSendTime = 0f;
     private float lastRosterResyncTime = 0f;
+    private float connectAttemptDeadline = 0f;
     private string lastLoggedRosterSignature = "";
     private const float HOST_TIMEOUT = 5.0f;
 
@@ -245,6 +251,15 @@ public class NetworkManager : MonoBehaviour, INetEventListener
             return;
 
         netManager.PollEvents();
+
+        // Give up on a dial that never landed, so the UI returns to the browser instead of
+        // sitting in ConnectingToLobby forever.
+        if (state == ConnectionState.ConnectingToLobby && Time.time > connectAttemptDeadline)
+        {
+            Debug.LogError("Connection attempt timed out - wrong address or port, or the host is gone");
+            AbortConnectionAttempt();
+            return;
+        }
 
         // Heartbeat Logic
         if (state != ConnectionState.Disconnected)
@@ -560,13 +575,22 @@ public class NetworkManager : MonoBehaviour, INetEventListener
     /// </summary>
     public bool HostLobby()
     {
+        return HostLobby(config != null ? config.gamePort : 7777);
+    }
+
+    /// <summary>
+    /// Host on an explicit port, so several instances can host on one machine - the default
+    /// port is already taken by the first of them.
+    /// </summary>
+    public bool HostLobby(int port)
+    {
         if (state != ConnectionState.Disconnected)
         {
             Debug.LogWarning("Cannot host lobby - already connected");
             return false;
         }
-        
-        bool success = netManager.Start(config.gamePort);
+
+        bool success = netManager.Start(port);
         
         if (success)
         {
@@ -576,11 +600,11 @@ public class NetworkManager : MonoBehaviour, INetEventListener
             state = ConnectionState.InLobby;
             RebuildRoster();
             ApplyRoster();
-            Debug.Log($"Hosting lobby on port {config.gamePort}");
+            Debug.Log($"Hosting lobby on port {port}");
         }
         else
         {
-            Debug.LogError($"Failed to start host on port {config.gamePort}");
+            Debug.LogError($"Failed to start host on port {port} - already in use?");
         }
         
         return success;
@@ -591,27 +615,48 @@ public class NetworkManager : MonoBehaviour, INetEventListener
     /// </summary>
     public bool JoinLobby(string hostAddress, int hostPort)
     {
+        // A dial that never completed leaves us in ConnectingToLobby. Abandon it rather than
+        // refusing forever - otherwise one failed attempt makes the client unable to retry.
+        if (state == ConnectionState.ConnectingToLobby)
+        {
+            Debug.LogWarning("Abandoning the previous connection attempt");
+            AbortConnectionAttempt();
+        }
+
         if (state != ConnectionState.Disconnected)
         {
-            Debug.LogWarning("Cannot join lobby - already connected");
+            Debug.LogWarning($"Cannot join lobby - state is {state}");
             return false;
         }
-        
+
         netManager.Start();
         NetPeer peer = netManager.Connect(hostAddress, hostPort, "");
-        
+
         if (peer != null)
         {
             state = ConnectionState.ConnectingToLobby;
+            connectAttemptDeadline = Time.time + ConnectTimeoutSeconds;
             Debug.Log($"Connecting to {hostAddress}:{hostPort}");
             return true;
         }
-        else
-        {
-            Debug.LogError($"Failed to connect to {hostAddress}:{hostPort}");
-            netManager.Stop();
-            return false;
-        }
+
+        Debug.LogError($"Failed to start a connection to {hostAddress}:{hostPort}");
+        netManager.Stop();
+        return false;
+    }
+
+    private float ConnectTimeoutSeconds => config != null ? config.connectionTimeout / 1000f : 5f;
+
+    private void AbortConnectionAttempt()
+    {
+        netManager.Stop();
+        peers.Clear();
+        playerIdByNetPeer.Clear();
+        roster.Clear();
+        ApplyRoster();
+        state = ConnectionState.Disconnected;
+        currentHostId = null;
+        localSpawnSlot = -1;
     }
     
     /// <summary>
