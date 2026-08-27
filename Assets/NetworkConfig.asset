@@ -21,3 +21,16 @@ MonoBehaviour:
   maxPlayers: 4
   inputBufferSize: 240
   lagCompensationWindow: 200
+  rttAlpha: 0.125
+  rttBeta: 0.25
+  rttDeviationWeight: 4
+  rttProbeInterval: 3000
+  rttStatsWindow: 30000
+  rttMinSamples: 5
+  rttSimulatedExtraMs: 0
+  proactiveMigrationEnabled: 1
+  proactiveCheckInterval: 30000
+  proactiveThresholdFactor: 3
+  proactiveMinCostGap: 100
+  proactiveSustainedChecks: 2
+  proactiveCooldown: 60000

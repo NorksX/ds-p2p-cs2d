@@ -33,6 +33,10 @@ public class NetworkManager : MonoBehaviour, INetEventListener
 
     private string currentHostId;
     private int localSpawnSlot = -1;
+
+    // Measures RTT to every participant and ranks them. Owns the whole latency side of host
+    // election; a plain object rather than a component, so none of this needs scene wiring.
+    private HostQualityMonitor quality;
     private readonly List<string> meshPeersToDrop = new List<string>();
 
     public bool isHost = false;
@@ -50,6 +54,23 @@ public class NetworkManager : MonoBehaviour, INetEventListener
     public int LocalSpawnSlot => localSpawnSlot;
     public IReadOnlyDictionary<string, PeerInfo> ConnectedPeers => peers;
     public IReadOnlyList<RosterEntry> Roster => roster;
+    public string CurrentHostId => currentHostId;
+    public NetworkConfig Config => config;
+
+    public HostQualityMonitor Quality => quality;
+
+    // Election tunables are read through here, never straight off the asset, so a command line
+    // can retune a demo without a rebuild. Overriding the ScriptableObject itself would be
+    // worse than useless: every instance on one machine shares that asset, and in the Editor a
+    // runtime write to it persists into the project.
+    public float SimulatedExtraMs => Overridden("rttExtraMs", config != null ? config.rttSimulatedExtraMs : 0f);
+    public float RttProbeInterval => Overridden("rttProbeInterval", config != null ? config.rttProbeInterval : 3000f);
+    public int RttMinSamples => (int)Overridden("rttMinSamples", config != null ? config.rttMinSamples : 5);
+    public float ProactiveCheckInterval => Overridden("proactiveCheckInterval", config != null ? config.proactiveCheckInterval : 30000f);
+    public float ProactiveThresholdFactor => Overridden("proactiveThresholdFactor", config != null ? config.proactiveThresholdFactor : 3f);
+    public int ProactiveSustainedChecks => (int)Overridden("proactiveSustainedChecks", config != null ? config.proactiveSustainedChecks : 2);
+    public float ProactiveCooldown => Overridden("proactiveCooldown", config != null ? config.proactiveCooldown : 60000f);
+    public float ProactiveMinCostGap => Overridden("proactiveMinCostGap", config != null ? config.proactiveMinCostGap : 100f);
 
     // The port actually bound, which after a migration is the ephemeral one this peer took as
     // a client - not config.gamePort. Discovery advertises this.
@@ -176,6 +197,10 @@ public class NetworkManager : MonoBehaviour, INetEventListener
     {
         if (PlayerSpawner.Instance != null)
             PlayerSpawner.Instance.SyncToRoster(roster, localPlayerId);
+
+        // Per-player state keyed to someone who left has to go, or a rejoin inherits a stale
+        // estimator and is judged on measurements of a previous session.
+        quality?.PruneToRoster();
     }
 
     private RosterEntry FindRosterEntry(string playerId)
@@ -223,6 +248,14 @@ public class NetworkManager : MonoBehaviour, INetEventListener
         // Initialize LiteNetLib
         netManager = new NetManager(this);
 
+        // RTT probes travel as connectionless packets on this same socket, which is what lets
+        // clients measure each other without a mesh. LiteNetLib drops them silently otherwise.
+        netManager.UnconnectedMessagesEnabled = true;
+
+        ParseCommandLineOverrides();
+
+        quality = new HostQualityMonitor(this);
+
         if (config != null)
         {
             // Drives LiteNetLib's own peer drop; otherwise transport defaults apply.
@@ -233,6 +266,129 @@ public class NetworkManager : MonoBehaviour, INetEventListener
             Debug.LogError("[NetworkManager] No NetworkConfig assigned - using transport defaults");
         }
     }
+
+    // -rttExtraMs <ms> on the command line beats the config asset, so four builds launched from
+    // one script can each carry a different simulated distance. The Editor has no such argument
+    // and falls back to the asset.
+    // Numeric flags a build accepts, e.g. -rttExtraMs 400 -proactiveCheckInterval 10000.
+    private static readonly string[] OverridableKeys =
+    {
+        "rttExtraMs", "rttProbeInterval", "rttMinSamples",
+        "proactiveCheckInterval", "proactiveThresholdFactor",
+        "proactiveSustainedChecks", "proactiveCooldown", "proactiveMinCostGap"
+    };
+
+    private readonly Dictionary<string, float> cliOverrides = new Dictionary<string, float>();
+    private string autoHostPort;
+    private string autoJoinEndpoint;
+    private string cliUsername;
+
+    private float Overridden(string key, float fallback)
+    {
+        return cliOverrides.TryGetValue(key, out float value) ? value : fallback;
+    }
+
+    private void ParseCommandLineOverrides()
+    {
+        string[] args = Environment.GetCommandLineArgs();
+
+        for (int i = 0; i < args.Length - 1; i++)
+        {
+            string flag = args[i].StartsWith("-") ? args[i].Substring(1) : null;
+            if (flag == null) continue;
+
+            if (flag == "autohost") { autoHostPort = args[i + 1]; continue; }
+            if (flag == "autojoin") { autoJoinEndpoint = args[i + 1]; continue; }
+            if (flag == "username") { cliUsername = args[i + 1]; continue; }
+
+            if (Array.IndexOf(OverridableKeys, flag) < 0) continue;
+
+            // Invariant culture: a machine with a comma decimal separator would otherwise read
+            // "3.0" as 30, silently making the threshold ten times stricter.
+            if (float.TryParse(args[i + 1], System.Globalization.NumberStyles.Float,
+                               System.Globalization.CultureInfo.InvariantCulture, out float parsed))
+                cliOverrides[flag] = parsed;
+            else
+                Debug.LogWarning($"[NetworkManager] Could not parse -{flag} '{args[i + 1]}'");
+        }
+
+        foreach (var kvp in cliOverrides)
+            Debug.Log($"[NetworkManager] Override -{kvp.Key} = {kvp.Value}");
+
+        ApplyUsername();
+    }
+
+    // The scene ships one username for everybody, so without this every instance on a machine
+    // logs as the same name and no roster, vote or cost table can be read. Identity itself was
+    // never affected - playerId is a per-instance GUID - but the logs were unusable.
+    private void ApplyUsername()
+    {
+        if (!string.IsNullOrEmpty(cliUsername))
+        {
+            localPlayerUsername = cliUsername;
+        }
+        else
+        {
+            string suffix = localPlayerId.Length >= 4 ? localPlayerId.Substring(0, 4) : localPlayerId;
+            localPlayerUsername = $"{localPlayerUsername}-{suffix}";
+        }
+
+        Debug.Log($"[NetworkManager] I am {localPlayerUsername} ({localPlayerId})");
+    }
+
+    // Autostart exists purely so a scripted multi-instance demo does not depend on clicking the
+    // same buttons in four windows in the right order.
+    private IEnumerator Start()
+    {
+        yield return null; // let PlayerSpawner and LanDiscovery come up
+
+        if (!string.IsNullOrEmpty(autoHostPort) && int.TryParse(autoHostPort, out int port))
+        {
+            Debug.Log($"[NetworkManager] -autohost {port}");
+            HostLobby(port);
+            yield break;
+        }
+
+        if (string.IsNullOrEmpty(autoJoinEndpoint))
+            yield break;
+
+        string[] parts = autoJoinEndpoint.Split(':');
+        if (parts.Length != 2 || !int.TryParse(parts[1], out int joinPort))
+        {
+            Debug.LogError($"[NetworkManager] -autojoin needs ip:port, got '{autoJoinEndpoint}'");
+            yield break;
+        }
+
+        // Stagger so several instances do not all dial on the same frame.
+        yield return new WaitForSeconds(1.0f + UnityEngine.Random.Range(0f, 0.5f));
+
+        // Retry rather than give up: a scripted demo usually launches the clients before the
+        // host finishes coming up, and one failed dial would otherwise need a manual relaunch.
+        float deadline = Time.time + AutoJoinRetryWindow;
+        int attempt = 0;
+
+        while (Time.time < deadline)
+        {
+            if (state == ConnectionState.InLobby)
+            {
+                Debug.Log($"[NetworkManager] -autojoin connected after {attempt} attempt(s)");
+                yield break;
+            }
+
+            if (state == ConnectionState.Disconnected)
+            {
+                attempt++;
+                Debug.Log($"[NetworkManager] -autojoin attempt {attempt} -> {parts[0]}:{joinPort}");
+                JoinLobby(parts[0], joinPort);
+            }
+
+            yield return new WaitForSeconds(1f);
+        }
+
+        Debug.LogError($"[NetworkManager] -autojoin gave up after {attempt} attempt(s) - is the host running on {parts[0]}:{joinPort}?");
+    }
+
+    private const float AutoJoinRetryWindow = 60f;
 
     private float lastHeartbeatSendTime = 0f;
     private float lastRosterResyncTime = 0f;
@@ -274,6 +430,12 @@ public class NetworkManager : MonoBehaviour, INetEventListener
             // Periodic roster resync, so a peer that somehow diverged heals itself.
             if (isHost && peers.Count > 0 && Time.time - lastRosterResyncTime > RosterResyncInterval)
                 BroadcastRoster();
+
+            // RTT probing, plus the periodic "is the host still the right one" check.
+            quality.Tick();
+
+            if (quality.TryConsumeProposal(out string challengerId))
+                BeginProactiveElection(challengerId);
             
             // 2. Check for Host Failure (Clients only)
             if (!isHost)
@@ -318,6 +480,18 @@ public class NetworkManager : MonoBehaviour, INetEventListener
     private bool isCandidate = false;
     private Coroutine migrationRoutine;
 
+    // Set while an election is replacing a host that is still alive. It changes who counts as
+    // a participant: a dead host is gone, a challenged one is still a voter.
+    private bool migrationIsProactive;
+    private bool proactiveElectionActive;
+    private Coroutine proactiveRoutine;
+
+    // The one claimant we agreed may demote our host. A live host stands down for nobody else.
+    private string grantedProactiveVoteTo;
+
+    private readonly List<string> electionPool = new List<string>();
+    private readonly List<string> electionVoters = new List<string>();
+
     private const int MaxElectionRounds = 5;
 
     private void HandleHostFailureDetect(HostFailureDetectMessage message)
@@ -327,7 +501,18 @@ public class NetworkManager : MonoBehaviour, INetEventListener
 
         Debug.Log($"[HostMigration] Host failure detected by {message.reporterId}, dead host: {currentHostId}");
 
+        // A real failure supersedes a proactive vote in flight. The mesh links already dialled
+        // are kept - DialSurvivors would only have to open them again.
+        if (proactiveRoutine != null)
+        {
+            StopCoroutine(proactiveRoutine);
+            proactiveRoutine = null;
+        }
+
+        proactiveElectionActive = false;
+
         state = ConnectionState.HostMigration;
+        migrationIsProactive = false;
         receivedVotes = 0;
         isCandidate = false;
 
@@ -372,7 +557,11 @@ public class NetworkManager : MonoBehaviour, INetEventListener
         foreach (var entry in roster)
         {
             if (entry.playerId == localPlayerId) continue;
-            if (entry.playerId == currentHostId) continue;
+
+            // Skip a dead host. A challenged live one is still a participant and a voter, and
+            // we already hold a link to it, so ContainsKey below skips it anyway.
+            if (!migrationIsProactive && entry.playerId == currentHostId) continue;
+
             if (peers.ContainsKey(entry.playerId)) continue;
 
             Debug.Log($"[HostMigration] Connecting to peer {entry.ipAddress}:{entry.listenPort}");
@@ -390,39 +579,77 @@ public class NetworkManager : MonoBehaviour, INetEventListener
         foreach (var entry in roster)
         {
             if (entry.playerId == localPlayerId) continue;
-            if (entry.playerId == currentHostId) continue;
+            if (!migrationIsProactive && entry.playerId == currentHostId) continue;
             if (peers.ContainsKey(entry.playerId)) count++;
         }
 
         return count;
     }
 
-    private void StartElection(int round)
+    // Everyone we can actually hear from. Serves as both the candidate pool and the electorate,
+    // which is what keeps quorum reachable when part of the roster is unreachable.
+    private void BuildReachable(List<string> into)
     {
-        bool amIBestCandidate = true;
+        into.Clear();
+        into.Add(localPlayerId);
 
         foreach (var entry in roster)
         {
             if (entry.playerId == localPlayerId) continue;
-            if (entry.playerId == currentHostId) continue;
+            if (!migrationIsProactive && entry.playerId == currentHostId) continue;
             if (!peers.ContainsKey(entry.playerId)) continue;
 
-            if (string.CompareOrdinal(entry.playerId, localPlayerId) < 0)
-            {
-                amIBestCandidate = false;
-                break;
-            }
+            into.Add(entry.playerId);
+        }
+    }
+
+    private static string LowestId(List<string> ids)
+    {
+        string lowest = null;
+
+        foreach (string id in ids)
+        {
+            if (lowest == null || string.CompareOrdinal(id, lowest) < 0)
+                lowest = id;
         }
 
-        Debug.Log($"[HostMigration] Round {round}: reachable={CountReachableParticipants()}, candidate={amIBestCandidate}");
+        return lowest;
+    }
+
+    /// <summary>
+    /// Who should stand. The aggregate argmin when RTT data exists, so exactly one peer
+    /// campaigns and a majority is actually attainable; lowest ordinal id when it does not,
+    /// which is the original behaviour and the reason a fresh session still elects normally.
+    /// </summary>
+    private string ChooseCandidate()
+    {
+        BuildReachable(electionVoters);
+
+        electionPool.Clear();
+        foreach (string id in electionVoters)
+        {
+            // A live host being challenged cannot stand to replace itself.
+            if (migrationIsProactive && id == currentHostId) continue;
+            electionPool.Add(id);
+        }
+
+        return quality.PickByAggregateCost(electionPool, electionVoters, 1) ?? LowestId(electionPool);
+    }
+
+    private void StartElection(int round)
+    {
+        string candidate = ChooseCandidate();
+        bool amIBestCandidate = candidate == localPlayerId;
+
+        Debug.Log($"[HostMigration] Round {round}: reachable={CountReachableParticipants()}, candidate={candidate}, me={amIBestCandidate}, proactive={migrationIsProactive}");
 
         if (!amIBestCandidate)
             return;
 
         isCandidate = true;
-        receivedVotes = 1; // vote for ourselves
+        receivedVotes = 1; // a candidate votes for itself
 
-        HostElectionRequest req = new HostElectionRequest(localPlayerId, TickManager.Instance.CurrentTick);
+        HostElectionRequest req = new HostElectionRequest(localPlayerId, TickManager.Instance.CurrentTick, round, migrationIsProactive);
         SendMessageToAll(req, DeliveryMethod.ReliableOrdered);
 
         CheckElectionVictory();
@@ -430,11 +657,54 @@ public class NetworkManager : MonoBehaviour, INetEventListener
 
     private void HandleHostElectionRequest(HostElectionRequest request, NetPeer peer)
     {
-        // Ordinal, not culture-sensitive: every peer must reach the same verdict.
-        bool isBetter = string.CompareOrdinal(request.candidateId, localPlayerId) < 0;
+        bool accepted;
 
-        HostElectionResponse response = new HostElectionResponse(localPlayerId, request.candidateId, isBetter);
+        if (request.proactive)
+        {
+            // Re-derive the verdict independently rather than trusting the claim. Agreeing here
+            // is also the permission a live host needs before it will step down for this peer.
+            accepted = quality.ValidateProactive(request.candidateId);
+
+            // Overwrite either way. A stale yes left over from an earlier failed round must not
+            // authorise a later claim we have since voted against.
+            grantedProactiveVoteTo = accepted ? request.candidateId : null;
+        }
+        else
+        {
+            accepted = request.candidateId == PreferredHost(request.round);
+        }
+
+        Debug.Log($"[HostMigration] Vote for {request.candidateId}: {(accepted ? "yes" : "no")} (round={request.round}, proactive={request.proactive})");
+
+        HostElectionResponse response = new HostElectionResponse(localPlayerId, request.candidateId, accepted);
         SendMessage(response, peer, DeliveryMethod.ReliableOrdered);
+    }
+
+    /// <summary>
+    /// Round 1 is the rule as specified: vote for whoever WE have the best ping to. If that
+    /// splits - two peers each preferring a different neighbour - round 2 onwards switches to
+    /// the shared aggregate, which every peer computes from the same matrix and so resolves
+    /// unanimously. With no RTT data at all it degrades to the original lowest-id rule.
+    /// </summary>
+    private string PreferredHost(int round)
+    {
+        BuildReachable(electionVoters);
+
+        electionPool.Clear();
+        foreach (string id in electionVoters)
+        {
+            // Never rank ourselves: our cost to ourselves is zero, so including it would make
+            // every peer prefer itself and no candidate could ever collect a vote.
+            if (id == localPlayerId) continue;
+            if (migrationIsProactive && id == currentHostId) continue;
+            electionPool.Add(id);
+        }
+
+        string pick = round <= 1
+            ? quality.PickByLocalCost(electionPool)
+            : quality.PickByAggregateCost(electionPool, electionVoters, 1);
+
+        return pick ?? LowestId(electionPool);
     }
 
     private void HandleHostElectionResponse(HostElectionResponse response)
@@ -461,30 +731,56 @@ public class NetworkManager : MonoBehaviour, INetEventListener
     
     private void ClaimHostRole()
     {
-        Debug.Log("[HostMigration] CLAIMING HOST ROLE...");
+        bool proactive = migrationIsProactive;
 
-        string deadHostId = currentHostId;
+        Debug.Log($"[HostMigration] CLAIMING HOST ROLE (proactive={proactive})...");
+
+        string previousHostId = currentHostId;
 
         isCandidate = false;
         StopMigrationRoutine();
+        StopProactiveRoutine();
+
+        proactiveElectionActive = false;
+        migrationIsProactive = false;
+        grantedProactiveVoteTo = null;
 
         isHost = true;
         currentHostId = localPlayerId;
         state = ConnectionState.InLobby;
 
-        // Drop the dead host and clear stale host flags before taking ownership of the roster.
-        if (!string.IsNullOrEmpty(deadHostId))
-            UnregisterPeer(deadHostId);
+        // A failed host is gone and must leave the roster. A host that merely stepped down is
+        // still connected and becomes an ordinary client, so it stays.
+        if (!proactive && !string.IsNullOrEmpty(previousHostId))
+            UnregisterPeer(previousHostId);
 
         foreach (var p in peers.Values)
             p.isHost = false;
 
-        HostClaimMessage claimMsg = new HostClaimMessage(localPlayerId, TickManager.Instance.CurrentTick);
+        RefreshPeerIdentitiesFromRoster();
+
+        HostClaimMessage claimMsg = new HostClaimMessage(localPlayerId, TickManager.Instance.CurrentTick, proactive);
         SendMessageToAll(claimMsg, DeliveryMethod.ReliableOrdered);
 
         BroadcastRoster();
+        quality.NoteMigration();
 
         Debug.Log("[HostMigration] Host claim broadcast. I am now the host.");
+    }
+
+    // A client records the host as "Host"/slot 0 when it joins, which is harmless until that
+    // host steps down and we have to publish a roster describing it.
+    private void RefreshPeerIdentitiesFromRoster()
+    {
+        foreach (var p in peers.Values)
+        {
+            RosterEntry entry = FindRosterEntry(p.peerId);
+
+            if (entry == null) continue;
+
+            p.username = entry.username;
+            p.assignedPlayerPosition = entry.spawnSlot;
+        }
     }
     
     private void HandleHostClaim(HostClaimMessage message, NetPeer sender)
@@ -496,13 +792,17 @@ public class NetworkManager : MonoBehaviour, INetEventListener
         // so the lower id always wins and the session cannot split in two.
         if (isHost)
         {
-            if (string.CompareOrdinal(message.newHostId, localPlayerId) >= 0)
+            // Stepping down while alive is only ever allowed for a claimant we voted for.
+            // Without that interlock any peer could demote the host by announcing itself.
+            bool grantedByUs = message.proactive && grantedProactiveVoteTo == message.newHostId;
+
+            if (!grantedByUs && string.CompareOrdinal(message.newHostId, localPlayerId) >= 0)
             {
                 Debug.Log($"[HostMigration] Ignoring claim from {message.newHostId} - our id wins");
                 return;
             }
 
-            Debug.LogWarning($"[HostMigration] Standing down for {message.newHostId}");
+            Debug.LogWarning($"[HostMigration] Standing down for {message.newHostId} (proactive={message.proactive})");
             isHost = false;
         }
 
@@ -510,11 +810,23 @@ public class NetworkManager : MonoBehaviour, INetEventListener
 
         isCandidate = false;
         StopMigrationRoutine();
+        StopProactiveRoutine();
 
-        // Drop the dead host, then promote the claimant. Keyed by playerId, so this no
+        proactiveElectionActive = false;
+        migrationIsProactive = false;
+        grantedProactiveVoteTo = null;
+
+        // Drop the previous host, then promote the claimant. Keyed by playerId, so this no
         // longer needs the old re-keying dance against connection-local NetPeer ids.
         if (!string.IsNullOrEmpty(currentHostId) && currentHostId != message.newHostId)
+        {
+            // UnregisterPeer only clears bookkeeping. When the old host is still alive its
+            // socket has to be closed explicitly, or the link leaks for the rest of the session.
+            if (message.proactive && peers.TryGetValue(currentHostId, out PeerInfo oldHost) && oldHost.netPeer != null)
+                oldHost.netPeer.Disconnect();
+
             UnregisterPeer(currentHostId);
+        }
 
         RosterEntry entry = FindRosterEntry(message.newHostId);
         int slot = entry != null ? entry.spawnSlot : 0;
@@ -528,6 +840,7 @@ public class NetworkManager : MonoBehaviour, INetEventListener
         state = ConnectionState.InLobby;
 
         DropMeshPeers();
+        quality.NoteMigration();
 
         Debug.Log($"[HostMigration] Accepted {message.newHostId} as host. Resuming.");
     }
@@ -560,6 +873,76 @@ public class NetworkManager : MonoBehaviour, INetEventListener
 
         StopCoroutine(migrationRoutine);
         migrationRoutine = null;
+    }
+
+    private void StopProactiveRoutine()
+    {
+        if (proactiveRoutine == null)
+            return;
+
+        StopCoroutine(proactiveRoutine);
+        proactiveRoutine = null;
+    }
+
+//proactive migration - the host is alive, just badly placed
+
+    // Unlike failure migration this must not freeze the simulation and must not touch the
+    // roster. If the vote does not carry, nothing whatsoever changed.
+    private void BeginProactiveElection(string challengerId)
+    {
+        if (challengerId != localPlayerId) return;
+        if (state != ConnectionState.InLobby) return;
+        if (proactiveElectionActive || migrationRoutine != null) return;
+
+        Debug.Log($"[Proactive] Host {currentHostId} is far worse placed than us - standing for election");
+
+        proactiveElectionActive = true;
+        migrationIsProactive = true;
+        receivedVotes = 0;
+        isCandidate = false;
+
+        proactiveRoutine = StartCoroutine(RunProactiveElection());
+    }
+
+    private IEnumerator RunProactiveElection()
+    {
+        // The star is intact, so the other clients have no link to us. Dial them for the vote;
+        // AbortProactiveElection tears the mesh back down if it fails.
+        DialSurvivors();
+
+        yield return new WaitForSeconds(1.0f);
+
+        if (!proactiveElectionActive)
+            yield break;
+
+        StartElection(1);
+
+        yield return new WaitForSeconds(1.5f);
+
+        if (!proactiveElectionActive)
+            yield break;
+
+        // A split proactive vote is a safe no-op: no retry and no runoff, because the session
+        // already has a working host. The cooldown then keeps a stable disagreement - the
+        // classic "my neighbour has better ping to me" split - from re-proposing every check.
+        Debug.Log("[Proactive] No majority, keeping the current host");
+        AbortProactiveElection();
+    }
+
+    private void AbortProactiveElection()
+    {
+        StopProactiveRoutine();
+
+        proactiveElectionActive = false;
+        migrationIsProactive = false;
+        isCandidate = false;
+        receivedVotes = 0;
+        grantedProactiveVoteTo = null;
+
+        // currentHostId never changed, so this drops exactly the links dialled for the vote
+        // and leaves the star as it was.
+        DropMeshPeers();
+        quality.NoteMigration();
     }
 
     
@@ -650,6 +1033,7 @@ public class NetworkManager : MonoBehaviour, INetEventListener
     private void AbortConnectionAttempt()
     {
         netManager.Stop();
+        quality.ResetAll();
         peers.Clear();
         playerIdByNetPeer.Clear();
         roster.Clear();
@@ -671,10 +1055,15 @@ public class NetworkManager : MonoBehaviour, INetEventListener
         }
         
         StopMigrationRoutine();
+        StopProactiveRoutine();
+        proactiveElectionActive = false;
+        migrationIsProactive = false;
+        grantedProactiveVoteTo = null;
         isCandidate = false;
         receivedVotes = 0;
 
         netManager.Stop();
+        quality.ResetAll();
 
         peers.Clear();
         playerIdByNetPeer.Clear();
@@ -709,6 +1098,20 @@ public class NetworkManager : MonoBehaviour, INetEventListener
             peerInfo.netPeer.Send(data, deliveryMethod);
         }
     }
+
+    /// <summary>
+    /// Connectionless send. RTT probing uses it to reach peers we hold no connection to, which
+    /// in a star is every client except from the host's point of view.
+    /// </summary>
+    public void SendUnconnected(NetDataWriter writer, string address, int port)
+    {
+        netManager?.SendUnconnectedMessage(writer, address, port);
+    }
+
+    public void SendUnconnected(NetDataWriter writer, System.Net.IPEndPoint endPoint)
+    {
+        netManager?.SendUnconnectedMessage(writer, endPoint);
+    }
     
  //event handlers default
     
@@ -723,7 +1126,7 @@ public class NetworkManager : MonoBehaviour, INetEventListener
             return;
         }
 
-        if (state == ConnectionState.HostMigration)
+        if (state == ConnectionState.HostMigration || proactiveElectionActive)
         {
             // Resolve the real playerId from the roster endpoint. The old code invented
             // "peer_<id>" placeholders here, which never matched a spawned player and so
@@ -826,6 +1229,10 @@ public class NetworkManager : MonoBehaviour, INetEventListener
     
     public void OnNetworkReceiveUnconnected(System.Net.IPEndPoint remoteEndPoint, NetPacketReader reader, UnconnectedMessageType messageType)
     {
+        // RTT probes arrive here rather than through HandleMessage: LiteNetLib routes an
+        // unconnected packet before any peer lookup, which is exactly why one code path can
+        // reach the connected host and unconnected clients alike.
+        quality?.HandleUnconnected(remoteEndPoint, reader);
     }
     
     public void OnNetworkLatencyUpdate(NetPeer peer, int latency)
@@ -838,6 +1245,19 @@ public class NetworkManager : MonoBehaviour, INetEventListener
         }
     }
     
+    private bool IsKnownRosterEndpoint(System.Net.IPEndPoint endPoint)
+    {
+        string ip = endPoint.Address.ToString();
+
+        foreach (var e in roster)
+        {
+            if (e.playerId != localPlayerId && e.ipAddress == ip && e.listenPort == endPoint.Port)
+                return true;
+        }
+
+        return false;
+    }
+
     public void OnConnectionRequest(ConnectionRequest request)
     {
         // 1. Host accepts everyone
@@ -846,9 +1266,16 @@ public class NetworkManager : MonoBehaviour, INetEventListener
             request.Accept();
         }
         // 2. Host Migration: Accept peers trying to form a mesh
-        else if (state == ConnectionState.HostMigration)
+        else if (state == ConnectionState.HostMigration || proactiveElectionActive)
         {
             Debug.Log($"[HostMigration] Accepting P2P connection from {request.RemoteEndPoint}");
+            request.Accept();
+        }
+        // 3. A peer already in the session dialling us directly - a challenger building the
+        // mesh it needs to run a proactive vote while the star is still up.
+        else if (IsKnownRosterEndpoint(request.RemoteEndPoint))
+        {
+            Debug.Log($"[NetworkManager] Accepting roster peer {request.RemoteEndPoint}");
             request.Accept();
         }
         else
@@ -921,7 +1348,7 @@ public class NetworkManager : MonoBehaviour, INetEventListener
         {
             // During migration this doubles as mesh identification, so a peer counts as
             // reachable for the election and is not dialled again next round.
-            if (state == ConnectionState.HostMigration && !peers.ContainsKey(request.playerId))
+            if ((state == ConnectionState.HostMigration || proactiveElectionActive) && !peers.ContainsKey(request.playerId))
             {
                 RosterEntry known = FindRosterEntry(request.playerId);
 

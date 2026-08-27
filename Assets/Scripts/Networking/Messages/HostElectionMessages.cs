@@ -7,13 +7,23 @@ public class HostElectionRequest : INetworkMessage
 {
     public string candidateId;
     public int candidateTick; // To prove they are up to date
-    
+
+    // Round 1 votes on the voter's own RTT measurements; later rounds fall back to the shared
+    // aggregate, which every peer computes identically and so cannot split.
+    public int round;
+
+    // Set when the current host is alive and merely badly placed. Voters then judge the
+    // proposal against the proactive threshold instead of on ping preference.
+    public bool proactive;
+
     public HostElectionRequest() { }
-    
-    public HostElectionRequest(string candidateId, int candidateTick)
+
+    public HostElectionRequest(string candidateId, int candidateTick, int round, bool proactive)
     {
         this.candidateId = candidateId;
         this.candidateTick = candidateTick;
+        this.round = round;
+        this.proactive = proactive;
     }
     
     public MessageType GetMessageType() => MessageType.HostElectionRequest;
@@ -22,12 +32,16 @@ public class HostElectionRequest : INetworkMessage
     {
         writer.Write(candidateId);
         writer.Write(candidateTick);
+        writer.Write(round);
+        writer.Write(proactive);
     }
     
     public void Deserialize(BinaryReader reader)
     {
         candidateId = reader.ReadString();
         candidateTick = reader.ReadInt32();
+        round = reader.ReadInt32();
+        proactive = reader.ReadBoolean();
     }
 }
 
