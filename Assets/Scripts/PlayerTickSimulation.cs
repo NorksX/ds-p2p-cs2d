@@ -142,6 +142,10 @@ public class PlayerTickSimulation : MonoBehaviour
         }
 
         // Rewind, then replay everything the host had not processed at that point.
+        float error = (predicted - authoritativePosition).magnitude;
+        int replayCount = Mathf.Max(0, lastSimulatedTick - ackTick);
+        Debug.Log($"[Reconcile] tick {ackTick}: off by {error:F3} (tolerance {positionTolerance}), snapping and replaying {replayCount} input(s)");
+
         player.Teleport(authoritativePosition);
         Record(ackTick, authoritativePosition);
 

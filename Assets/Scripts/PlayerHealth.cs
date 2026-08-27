@@ -32,11 +32,12 @@ public class PlayerHealth : MonoBehaviour
             return;
 
         currentHealth = Mathf.Max(currentHealth - amount, 0);
+        Debug.Log($"[Health] {name} took {amount}, now {currentHealth}");
 
         if (IsDead)
         {
             respawnAt = Time.time + respawnDelay;
-            Debug.Log($"[PlayerHealth] {name} died, respawning in {respawnDelay}s");
+            Debug.Log($"[Health] {name} died, respawning in {respawnDelay}s");
         }
     }
 
@@ -67,6 +68,6 @@ public class PlayerHealth : MonoBehaviour
         if (networked != null && controller != null && PlayerSpawner.Instance != null)
             controller.Teleport(PlayerSpawner.Instance.GetSpawnPosition(networked.playerPosition));
 
-        Debug.Log($"[PlayerHealth] {name} respawned");
+        Debug.Log($"[Health] {name} respawned");
     }
 }

@@ -158,6 +158,8 @@ public class NetworkStateHost : MonoBehaviour
                 {
                     networkedPlayer.playerController.SimulateShoot(input.aimDir);
 
+                    Debug.Log($"[Shoot] host resolved shot from {networkedPlayer.name} at tick {input.tick}");
+
                     // Origin is read after the step, so the shot leaves from where they were.
                     Vector2 shootOrigin = networkedPlayer.transform.position;
                     ShootEventMessage shootMsg = new ShootEventMessage(playerId, shootOrigin, input.aimDir);

@@ -10,6 +10,12 @@ public class NetworkInputSender : MonoBehaviour
 {
     private NetworkedPlayer networkedPlayer;
     private LocalInputBuffer inputBuffer;
+
+    // Per-second summary rather than per-tick lines: at 30 Hz the raw form is unreadable, and
+    // it would not collapse in the console either because the tick number changes every time.
+    private float lastReportTime;
+    private int sentSinceReport;
+    private int movingSinceReport;
     
     // Don't get components in Awake - PlayerSpawner adds them AFTER instantiation
     
@@ -78,8 +84,17 @@ public class NetworkInputSender : MonoBehaviour
             // Send to host
             InputCommandMessage message = new InputCommandMessage(cmd);
             NetworkManager.Instance.SendMessageToAll(message, DeliveryMethod.Sequenced);
-            
-            // Debug.Log($"[NetworkInputSender] Sent input to host, tick={tick}, move={cmd.move}");
+
+            sentSinceReport++;
+            if (cmd.move.sqrMagnitude > 0.0001f) movingSinceReport++;
+
+            if (Time.time - lastReportTime >= 1f)
+            {
+                Debug.Log($"[Input] sent {sentSinceReport} commands to host in the last second ({movingSinceReport} with movement), through tick {tick - 1}");
+                lastReportTime = Time.time;
+                sentSinceReport = 0;
+                movingSinceReport = 0;
+            }
         }
     }
 }
