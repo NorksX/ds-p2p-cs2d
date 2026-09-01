@@ -64,8 +64,6 @@ public static class MessageSerializer
                 return new JoinLobbyRequest();
             case MessageType.JoinLobbyResponse:
                 return new JoinLobbyResponse();
-            case MessageType.LeaveLobby:
-                return new LeaveLobby();
             case MessageType.PlayerDisconnected:
                 return new PlayerDisconnectedMessage();
             case MessageType.InputCommand:
@@ -78,8 +76,6 @@ public static class MessageSerializer
                 return new ZombieStateMessage();
             case MessageType.Heartbeat:
                 return new Heartbeat();
-            case MessageType.HostFailureDetect:
-                return new HostFailureDetectMessage();
             case MessageType.SessionRoster:
                 return new SessionRosterMessage();
             case MessageType.HostElectionRequest:

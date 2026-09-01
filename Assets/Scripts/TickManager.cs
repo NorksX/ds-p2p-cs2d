@@ -48,8 +48,6 @@ public class TickManager : MonoBehaviour
 
     private void AdvanceTick()
     {
-        // Debug.Log($"Tick {CurrentTick}, listeners = {(OnTick == null ? 0 : OnTick.GetInvocationList().Length)}");
-
         CurrentTick++;
         OnTick?.Invoke(CurrentTick);
     }

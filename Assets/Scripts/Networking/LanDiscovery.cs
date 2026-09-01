@@ -45,7 +45,6 @@ public class LanDiscovery : MonoBehaviour, INetEventListener
     private readonly List<string> staleHosts = new List<string>();
 
     public IEnumerable<DiscoveredHost> Hosts => found.Values;
-    public int HostCount => found.Count;
 
     private void Awake()
     {
@@ -115,22 +114,6 @@ public class LanDiscovery : MonoBehaviour, INetEventListener
 
         if (!manager.SendBroadcast(writer, discoveryPort))
             Debug.LogWarning("[LanDiscovery] Broadcast failed");
-    }
-
-    public bool TryGetFirstJoinable(out DiscoveredHost host)
-    {
-        host = default;
-
-        foreach (var candidate in found.Values)
-        {
-            if (candidate.IsFull)
-                continue;
-
-            host = candidate;
-            return true;
-        }
-
-        return false;
     }
 
     private void DropStaleHosts()

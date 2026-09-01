@@ -50,30 +50,22 @@ public class NetworkStateHost : MonoBehaviour
     
     private void HandleMessage(INetworkMessage message, NetPeer peer)
     {
-        // Debug.Log($"[NetworkStateHost] HandleMessage called! MessageType={message.GetMessageType()}, IsHost={NetworkManager.Instance?.IsHost}");
-        
         // Only host processes input commands
         if (!NetworkManager.Instance.IsHost)
-        {
-            // Debug.Log("[NetworkStateHost] Not host, ignoring message");
             return;
-        }
-        
+
         if (message.GetMessageType() == MessageType.InputCommand)
         {
             InputCommandMessage inputMsg = (InputCommandMessage)message;
             string playerId = inputMsg.inputCommand.playerId;
-            
-            // Debug.Log($"[NetworkStateHost] Received InputCommand from {playerId}, move={inputMsg.inputCommand.move}, aimDir={inputMsg.inputCommand.aimDir}");
-            
+
             // Queue-based processing: Add input to the list for this player
             if (!receivedInputs.ContainsKey(playerId))
             {
                 receivedInputs[playerId] = new List<InputCommand>();
             }
-            
+
             receivedInputs[playerId].Add(inputMsg.inputCommand);
-            // Debug.Log($"[NetworkStateHost] Queued input! Player {playerId} now has {receivedInputs[playerId].Count} inputs pending");
         }
     }
     
@@ -103,16 +95,12 @@ public class NetworkStateHost : MonoBehaviour
             return;
         }
         
-        int totalInputsProcessed = 0;
-        
         // Process ALL queued inputs for each player
         foreach (var kvp in receivedInputs)
         {
             string playerId = kvp.Key;
             List<InputCommand> inputQueue = kvp.Value;
-            
-            // Debug.Log($"[NetworkStateHost] Processing {inputQueue.Count} queued inputs for playerId={playerId}");
-            
+
             NetworkedPlayer networkedPlayer = PlayerSpawner.Instance.GetPlayer(playerId);
             
             if (networkedPlayer == null)
@@ -160,23 +148,18 @@ public class NetworkStateHost : MonoBehaviour
 
                     Debug.Log($"[Shoot] host resolved shot from {networkedPlayer.name} at tick {input.tick}");
 
-                    // Origin is read after the step, so the shot leaves from where they were.
-                    Vector2 shootOrigin = networkedPlayer.transform.position;
-                    ShootEventMessage shootMsg = new ShootEventMessage(playerId, shootOrigin, input.aimDir);
+                    ShootEventMessage shootMsg = new ShootEventMessage(playerId, input.aimDir);
                     NetworkManager.Instance.SendMessageToAll(shootMsg, LiteNetLib.DeliveryMethod.ReliableOrdered);
                 }
 
                 processedThrough = input.tick;
-                totalInputsProcessed++;
             }
 
             lastProcessedTick[playerId] = processedThrough;
         }
 
         PruneDepartedPlayers();
-        
-        // Debug.Log($"[NetworkStateHost] Processed inputs for {totalInputsProcessed} players this tick");
-        
+
         // Clear all input queues
         receivedInputs.Clear();
     }

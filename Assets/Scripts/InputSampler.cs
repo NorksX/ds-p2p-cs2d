@@ -131,7 +131,6 @@ public class InputSampler : MonoBehaviour
             tick,
             moveInput,
             aimDir,
-            fireHeld,
             firePressed,
             NetworkManager.Instance != null ? NetworkManager.Instance.LocalPlayerId : ""
         );

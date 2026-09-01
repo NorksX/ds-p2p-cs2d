@@ -96,11 +96,6 @@ public class PlayerSpawner : MonoBehaviour
         Debug.Log($"Spawned remote player '{username}' at position {playerPosition}");
     }
     
-    public void SpawnRemotePlayer(PeerInfo peerInfo)
-    {
-        SpawnRemotePlayerByInfo(peerInfo.peerId, peerInfo.assignedPlayerPosition, peerInfo.username);
-    }
-
     // PlayerInput pairs the keyboard/mouse in OnEnable and the first instance claims them,
     // so a remote player spawned before the local one would steal its input.
     private void StripInputFrom(GameObject playerObj)

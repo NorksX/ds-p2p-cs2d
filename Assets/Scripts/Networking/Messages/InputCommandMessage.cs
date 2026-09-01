@@ -25,7 +25,6 @@ public class InputCommandMessage : INetworkMessage
         writer.Write(inputCommand.move.y);
         writer.Write(inputCommand.aimDir.x);
         writer.Write(inputCommand.aimDir.y);
-        writer.Write(inputCommand.fireHeld);
         writer.Write(inputCommand.firePressed);
     }
     
@@ -37,14 +36,12 @@ public class InputCommandMessage : INetworkMessage
         float moveY = reader.ReadSingle();
         float aimX = reader.ReadSingle();
         float aimY = reader.ReadSingle();
-        bool fireHeld = reader.ReadBoolean();
         bool firePressed = reader.ReadBoolean();
         
         inputCommand = new InputCommand(
             tick,
             new Vector2(moveX, moveY),
             new Vector2(aimX, aimY),
-            fireHeld,
             firePressed,
             playerId
         );

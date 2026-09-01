@@ -182,21 +182,6 @@ public class NetworkTestUI : MonoBehaviour
         }
     }
     
-    public void OnLeaveButtonClicked()
-    {
-        if (NetworkManager.Instance != null)
-        {
-            NetworkManager.Instance.LeaveLobby();
-            
-            // Show connection panel, hide lobby panel
-            if (connectionPanel != null)
-                connectionPanel.SetActive(true);
-            
-            if (lobbyPanel != null)
-                lobbyPanel.SetActive(false);
-        }
-    }
-    
     private void UpdateStatus()
     {
         if (statusText == null || NetworkManager.Instance == null)

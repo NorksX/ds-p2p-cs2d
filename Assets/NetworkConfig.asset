@@ -13,14 +13,10 @@ MonoBehaviour:
   m_Name: NetworkConfig
   m_EditorClassIdentifier: Assembly-CSharp::NetworkConfig
   gamePort: 7777
-  tickRate: 30
   fullStateInterval: 500
   heartbeatInterval: 200
   connectionTimeout: 5000
-  hostFailureTimeout: 2000
   maxPlayers: 4
-  inputBufferSize: 240
-  lagCompensationWindow: 200
   rttAlpha: 0.125
   rttBeta: 0.25
   rttDeviationWeight: 4

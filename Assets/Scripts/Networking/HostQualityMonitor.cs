@@ -111,8 +111,7 @@ public class HostQualityMonitor
         }
     }
 
-    /// <summary>Returns true when the packet was ours, so the caller can stop looking at it.</summary>
-    public bool HandleUnconnected(IPEndPoint from, NetPacketReader reader)
+    public void HandleUnconnected(IPEndPoint from, NetPacketReader reader)
     {
         string tag;
 
@@ -122,22 +121,13 @@ public class HostQualityMonitor
         }
         catch (Exception)
         {
-            return false;
+            return; // not ours
         }
 
         if (tag == PingTag)
-        {
             AnswerPing(from, reader);
-            return true;
-        }
-
-        if (tag == PongTag)
-        {
+        else if (tag == PongTag)
             AcceptPong(reader);
-            return true;
-        }
-
-        return false;
     }
 
     private void AnswerPing(IPEndPoint asker, NetPacketReader reader)

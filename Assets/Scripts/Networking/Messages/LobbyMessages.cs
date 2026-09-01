@@ -7,18 +7,16 @@ public class JoinLobbyRequest : INetworkMessage
 {
     public string playerId;
     public string playerUsername;
-    public int latency;
 
     // Port this peer listens on, so the roster can carry a dialable endpoint for migration.
     public int listenPort;
 
     public JoinLobbyRequest() { }
 
-    public JoinLobbyRequest(string playerId, string playerUsername, int latency, int listenPort)
+    public JoinLobbyRequest(string playerId, string playerUsername, int listenPort)
     {
         this.playerId = playerId;
         this.playerUsername = playerUsername;
-        this.latency = latency;
         this.listenPort = listenPort;
     }
 
@@ -28,7 +26,6 @@ public class JoinLobbyRequest : INetworkMessage
     {
         writer.Write(playerId);
         writer.Write(playerUsername);
-        writer.Write(latency);
         writer.Write(listenPort);
     }
 
@@ -36,7 +33,6 @@ public class JoinLobbyRequest : INetworkMessage
     {
         playerId = reader.ReadString();
         playerUsername = reader.ReadString();
-        latency = reader.ReadInt32();
         listenPort = reader.ReadInt32();
     }
 }
@@ -77,32 +73,5 @@ public class JoinLobbyResponse : INetworkMessage
         assignedPlayerPosition = reader.ReadInt32();
         reason = reader.ReadString();
         hostId = reader.ReadString();
-    }
-}
-
-/// <summary>
-/// Player leaves
-/// </summary>
-public class LeaveLobby : INetworkMessage
-{
-    public string playerId;
-    
-    public LeaveLobby() { }
-    
-    public LeaveLobby(string playerId)
-    {
-        this.playerId = playerId;
-    }
-    
-    public MessageType GetMessageType() => MessageType.LeaveLobby;
-    
-    public void Serialize(BinaryWriter writer)
-    {
-        writer.Write(playerId);
-    }
-    
-    public void Deserialize(BinaryReader reader)
-    {
-        playerId = reader.ReadString();
     }
 }

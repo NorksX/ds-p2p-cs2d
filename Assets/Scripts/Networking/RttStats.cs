@@ -10,11 +10,8 @@ public class RttStats
 {
     public float EstimatedRtt { get; private set; }
     public float DevRtt { get; private set; }
-    public float LastSampleRtt { get; private set; }
     public float LastSampleTime { get; private set; }
     public bool HasEstimate { get; private set; }
-    public int ProbesSent { get; private set; }
-    public int RepliesReceived { get; private set; }
 
 
     private const int OutstandingSlots = 4;
@@ -29,7 +26,6 @@ public class RttStats
     {
         outstanding[outstandingHead] = stamp;
         outstandingHead = (outstandingHead + 1) % OutstandingSlots;
-        ProbesSent++;
     }
 
     public bool TryAcceptReply(long echoedStamp, float now, float alpha, float beta, float simulatedExtraMs)
@@ -57,7 +53,6 @@ public class RttStats
         float sampleRtt = (float)(elapsed * 1000.0 / Stopwatch.Frequency) + simulatedExtraMs;
 
         AddSample(sampleRtt, now, alpha, beta);
-        RepliesReceived++;
         return true;
     }
 
@@ -76,7 +71,6 @@ public class RttStats
             EstimatedRtt = (1f - alpha) * EstimatedRtt + alpha * sampleRtt;
         }
 
-        LastSampleRtt = sampleRtt;
         LastSampleTime = now;
 
         sampleTimes[sampleHead] = now;
@@ -104,21 +98,5 @@ public class RttStats
     public bool IsUsable(float now, float window, int minSamples)
     {
         return HasEstimate && SamplesInWindow(now, window) >= minSamples;
-    }
-
-    public void Reset()
-    {
-        EstimatedRtt = 0f;
-        DevRtt = 0f;
-        LastSampleRtt = 0f;
-        LastSampleTime = 0f;
-        HasEstimate = false;
-        ProbesSent = 0;
-        RepliesReceived = 0;
-        outstandingHead = 0;
-        sampleHead = 0;
-
-        for (int i = 0; i < OutstandingSlots; i++) outstanding[i] = 0;
-        for (int i = 0; i < WindowSlots; i++) sampleTimes[i] = 0f;
     }
 }

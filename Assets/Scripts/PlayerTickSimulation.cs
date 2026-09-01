@@ -111,7 +111,7 @@ public class PlayerTickSimulation : MonoBehaviour
                 NetworkedPlayer np = GetComponent<NetworkedPlayer>();
                 if (np != null)
                 {
-                    ShootEventMessage shootMsg = new ShootEventMessage(np.playerId, player.Position, cmd.aimDir);
+                    ShootEventMessage shootMsg = new ShootEventMessage(np.playerId, cmd.aimDir);
                     NetworkManager.Instance.SendMessageToAll(shootMsg, LiteNetLib.DeliveryMethod.ReliableOrdered);
                 }
             }

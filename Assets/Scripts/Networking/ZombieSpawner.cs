@@ -51,9 +51,6 @@ public class ZombieSpawner : MonoBehaviour
     private float nextWaveTime;
     private bool waveInProgress;
 
-    public int WaveNumber => waveNumber;
-    public int AliveCount => zombies.Count;
-
     private void Awake()
     {
         if (Instance != null && Instance != this)

@@ -65,9 +65,8 @@ public class NetworkInputSender : MonoBehaviour
         if (NetworkManager.Instance == null || networkedPlayer == null || inputBuffer == null)
             return;
             
-        // Stop sending if not connected or migrating
-        // Note: Currently the game runs in 'InLobby' state, 'Connected' is unused.
-        if (NetworkManager.Instance.State != ConnectionState.Connected && NetworkManager.Instance.State != ConnectionState.InLobby)
+        // Stop sending while disconnected or migrating - there is no authority to send to.
+        if (NetworkManager.Instance.State != ConnectionState.InLobby)
             return;
             
         // Only send inputs if we're a client (not host)

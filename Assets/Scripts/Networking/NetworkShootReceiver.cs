@@ -32,9 +32,7 @@ public class NetworkShootReceiver : MonoBehaviour
         if (message.GetMessageType() == MessageType.ShootEvent)
         {
             ShootEventMessage shootMsg = (ShootEventMessage)message;
-            
-            // Debug.Log($"[NetworkShootReceiver] Received shoot event from {shootMsg.shooterId}, origin={shootMsg.origin}, aimDir={shootMsg.aimDir}");
-            
+
             // Find the player who shot
             if (PlayerSpawner.Instance != null)
             {
@@ -44,7 +42,6 @@ public class NetworkShootReceiver : MonoBehaviour
                 {
                     // Visualize the shoot on the client
                     shooter.playerController.SimulateShoot(shootMsg.aimDir);
-                    // Debug.Log($"[NetworkShootReceiver] Visualized shoot from {shootMsg.shooterId}");
                 }
                 else
                 {

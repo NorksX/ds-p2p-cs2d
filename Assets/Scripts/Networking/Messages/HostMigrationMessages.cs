@@ -1,32 +1,15 @@
 using System.IO;
 
 /// <summary>
-/// Heartbeat message sent between all peers to detect disconnections
+/// Keepalive sent to every connected peer. Deliberately payload-free: the receiver identifies
+/// the sender from the NetPeer it arrived on, and the only thing recorded is the arrival time,
+/// which is what host-failure detection watches.
 /// </summary>
 public class Heartbeat : INetworkMessage
 {
-    public int tick;
-    public string senderId;
-    
-    public Heartbeat() { }
-    
-    public Heartbeat(int tick, string senderId)
-    {
-        this.tick = tick;
-        this.senderId = senderId;
-    }
-    
     public MessageType GetMessageType() => MessageType.Heartbeat;
-    
-    public void Serialize(BinaryWriter writer)
-    {
-        writer.Write(tick);
-        writer.Write(senderId);
-    }
-    
-    public void Deserialize(BinaryReader reader)
-    {
-        tick = reader.ReadInt32();
-        senderId = reader.ReadString();
-    }
+
+    public void Serialize(BinaryWriter writer) { }
+
+    public void Deserialize(BinaryReader reader) { }
 }

@@ -50,14 +50,10 @@ public class NetworkManager : MonoBehaviour, INetEventListener
     public ConnectionState State => state;
     public bool IsHost => isHost;
     public string LocalPlayerId => localPlayerId;
-    public string LocalUsername => localPlayerUsername;
-    public int LocalSpawnSlot => localSpawnSlot;
     public IReadOnlyDictionary<string, PeerInfo> ConnectedPeers => peers;
     public IReadOnlyList<RosterEntry> Roster => roster;
     public string CurrentHostId => currentHostId;
     public NetworkConfig Config => config;
-
-    public HostQualityMonitor Quality => quality;
 
     // Election tunables are read through here, never straight off the asset, so a command line
     // can retune a demo without a rebuild. Overriding the ScriptableObject itself would be
@@ -447,9 +443,8 @@ public class NetworkManager : MonoBehaviour, INetEventListener
     
     private void SendHeartbeat()
     {
-        int currentTick = TickManager.Instance != null ? TickManager.Instance.CurrentTick : 0;
-        Heartbeat msg = new Heartbeat(currentTick, localPlayerId);
-        
+        Heartbeat msg = new Heartbeat();
+
         // Transport-level list, so unidentified mesh connections are covered too.
         foreach (var peer in netManager.ConnectedPeerList)
         {
@@ -470,8 +465,7 @@ public class NetworkManager : MonoBehaviour, INetEventListener
         {
             Debug.LogError($"[NetworkManager] HOST TIMEOUT: last heard {Time.time - host.lastHeartbeatReceiveTime:F1}s ago");
 
-            HostFailureDetectMessage msg = new HostFailureDetectMessage(localPlayerId, TickManager.Instance.CurrentTick);
-            HandleHostFailureDetect(msg);
+            BeginHostMigration(localPlayerId);
         }
     }
     
@@ -494,12 +488,12 @@ public class NetworkManager : MonoBehaviour, INetEventListener
 
     private const int MaxElectionRounds = 5;
 
-    private void HandleHostFailureDetect(HostFailureDetectMessage message)
+    private void BeginHostMigration(string reporterId)
     {
         if (state == ConnectionState.HostMigration)
             return;
 
-        Debug.Log($"[HostMigration] Host failure detected by {message.reporterId}, dead host: {currentHostId}");
+        Debug.Log($"[HostMigration] Host failure detected by {reporterId}, dead host: {currentHostId}");
 
         // A real failure supersedes a proactive vote in flight. The mesh links already dialled
         // are kept - DialSurvivors would only have to open them again.
@@ -649,7 +643,7 @@ public class NetworkManager : MonoBehaviour, INetEventListener
         isCandidate = true;
         receivedVotes = 1; // a candidate votes for itself
 
-        HostElectionRequest req = new HostElectionRequest(localPlayerId, TickManager.Instance.CurrentTick, round, migrationIsProactive);
+        HostElectionRequest req = new HostElectionRequest(localPlayerId, round, migrationIsProactive);
         SendMessageToAll(req, DeliveryMethod.ReliableOrdered);
 
         CheckElectionVictory();
@@ -759,7 +753,7 @@ public class NetworkManager : MonoBehaviour, INetEventListener
 
         RefreshPeerIdentitiesFromRoster();
 
-        HostClaimMessage claimMsg = new HostClaimMessage(localPlayerId, TickManager.Instance.CurrentTick, proactive);
+        HostClaimMessage claimMsg = new HostClaimMessage(localPlayerId, proactive);
         SendMessageToAll(claimMsg, DeliveryMethod.ReliableOrdered);
 
         BroadcastRoster();
@@ -1142,12 +1136,12 @@ public class NetworkManager : MonoBehaviour, INetEventListener
             // Identify ourselves regardless of whether the endpoint matched. Inferring identity
             // from an address is fragile, and a mesh peer that never registers gets dialled
             // again every retry round - which is the reconnect spam.
-            JoinLobbyRequest identity = new JoinLobbyRequest(localPlayerId, localPlayerUsername, 0, netManager.LocalPort);
+            JoinLobbyRequest identity = new JoinLobbyRequest(localPlayerId, localPlayerUsername, netManager.LocalPort);
             SendMessage(identity, peer, DeliveryMethod.ReliableOrdered);
             return;
         }
 
-        JoinLobbyRequest request = new JoinLobbyRequest(localPlayerId, localPlayerUsername, 0, netManager.LocalPort);
+        JoinLobbyRequest request = new JoinLobbyRequest(localPlayerId, localPlayerUsername, netManager.LocalPort);
         SendMessage(request, peer, DeliveryMethod.ReliableOrdered);
     }
     
@@ -1185,8 +1179,7 @@ public class NetworkManager : MonoBehaviour, INetEventListener
                 roster.RemoveAll(e => e.playerId == disconnectedPlayerId);
                 ApplyRoster();
 
-                HostFailureDetectMessage failMsg = new HostFailureDetectMessage(localPlayerId, TickManager.Instance.CurrentTick);
-                HandleHostFailureDetect(failMsg);
+                BeginHostMigration(localPlayerId);
             }
             else
             {
@@ -1235,15 +1228,9 @@ public class NetworkManager : MonoBehaviour, INetEventListener
         quality?.HandleUnconnected(remoteEndPoint, reader);
     }
     
-    public void OnNetworkLatencyUpdate(NetPeer peer, int latency)
-    {
-        PeerInfo peerInfo = FindPeer(peer);
-
-        if (peerInfo != null)
-        {
-            peerInfo.latency = latency;
-        }
-    }
+    // Required by INetEventListener. LiteNetLib's own latency estimate is not used: host
+    // election ranks on HostQualityMonitor's Jacobson/Karels measurements instead.
+    public void OnNetworkLatencyUpdate(NetPeer peer, int latency) { }
     
     private bool IsKnownRosterEndpoint(System.Net.IPEndPoint endPoint)
     {
@@ -1299,17 +1286,12 @@ public class NetworkManager : MonoBehaviour, INetEventListener
                 HandleJoinLobbyResponse((JoinLobbyResponse)message, peer);
                 break;
                 
-            case MessageType.LeaveLobby:
-                HandleLeaveLobby((LeaveLobby)message, peer);
-                break;
-                
             case MessageType.PlayerDisconnected:
                 HandlePlayerDisconnected((PlayerDisconnectedMessage)message);
                 break;
                 
             case MessageType.Heartbeat:
-                // Debug.Log($"[HEARTBEAT RECEIVED] from peer={peer.Id}");
-                HandleHeartbeat((Heartbeat)message, peer);
+                HandleHeartbeat(peer);
                 break;
                 
             case MessageType.SessionRoster:
@@ -1411,14 +1393,6 @@ public class NetworkManager : MonoBehaviour, INetEventListener
         }
     }
     
-    private void HandleLeaveLobby(LeaveLobby message, NetPeer peer)
-    {
-        if (FindPeer(peer) != null)
-        {
-            peer.Disconnect();
-        }
-    }
-    
     private void HandlePlayerDisconnected(PlayerDisconnectedMessage message)
     {
         Debug.Log($"[NetworkManager] Received PlayerDisconnected for player {message.playerId}");
@@ -1455,14 +1429,11 @@ public class NetworkManager : MonoBehaviour, INetEventListener
         Debug.Log($"[NetworkManager] Roster updated: {roster.Count} participants, host={currentHostId}");
     }
 
-    private void HandleHeartbeat(Heartbeat heartbeat, NetPeer peer)
+    private void HandleHeartbeat(NetPeer peer)
     {
         PeerInfo peerInfo = FindPeer(peer);
 
         if (peerInfo != null)
-        {
-            peerInfo.lastHeartbeatTick = heartbeat.tick;
             peerInfo.lastHeartbeatReceiveTime = Time.time;
-        }
     }
 }

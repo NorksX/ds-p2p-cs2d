@@ -6,7 +6,7 @@ public enum MessageType : byte
     // Lobby messages (1-10)
     JoinLobbyRequest = 1,
     JoinLobbyResponse = 2,
-    LeaveLobby = 3,
+    // 3 was LeaveLobby, retired - departure is detected from the transport disconnect.
     PlayerDisconnected = 4,  // Broadcast when player disconnects
     
     // Game messages (20-30)
@@ -18,13 +18,11 @@ public enum MessageType : byte
     
     // System messages (100+)
     Heartbeat = 100,
-    HostFailureDetect = 101, // Broadcast when host timeout detected
+    // 101 was HostFailureDetect, retired - each peer detects host loss independently.
     SessionRoster = 102,     // Host sends the authoritative participant list to everyone
     HostElectionRequest = 103, // Candidate requests votes
     HostElectionResponse = 104, // Peer votes
     HostClaim = 105
-    
-    //HostClaim = 25
 }
 
 /// <summary>

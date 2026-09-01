@@ -1,42 +1,30 @@
 using UnityEngine;
 
 /// <summary>
-/// Configuration for networking settings (tick rate, ports, timeouts, etc.)
+/// Configuration for networking settings (ports, timings, timeouts).
+/// Every field here is actually read somewhere - do not add speculative ones.
 /// </summary>
 [CreateAssetMenu(fileName = "NetworkConfig", menuName = "Networking/Network Config")]
 public class NetworkConfig : ScriptableObject
 {
     [Header("Connection Settings")]
-    [Tooltip("Port for P2P game connections")]
+    [Tooltip("Default port for P2P game connections, overridable per-host in the UI")]
     public int gamePort = 7777;
 
     [Header("Timing")]
-    [Tooltip("Simulation ticks per second (should match TickManager)")]
-    public int tickRate = 30;
-    
-    [Tooltip("How often to send full state snapshots (milliseconds)")]
+    [Tooltip("How often the host rebroadcasts the roster (milliseconds)")]
     public int fullStateInterval = 500;
-    
+
     [Tooltip("How often to send heartbeats (milliseconds)")]
     public int heartbeatInterval = 2000;
-    
+
     [Header("Timeouts")]
-    [Tooltip("Connection timeout in milliseconds")]
+    [Tooltip("Connection attempt timeout, and LiteNetLib's own DisconnectTimeout (milliseconds)")]
     public int connectionTimeout = 5000;
-    
-    [Tooltip("Host failure detection timeout in milliseconds")]
-    public int hostFailureTimeout = 2000;
-    
+
     [Header("Player Settings")]
     [Tooltip("Maximum players per lobby")]
     public int maxPlayers = 4;
-    
-    [Header("Performance")]
-    [Tooltip("Size of input buffer (how many ticks to keep)")]
-    public int inputBufferSize = 240;
-    
-    [Tooltip("Lag compensation window in milliseconds")]
-    public int lagCompensationWindow = 200;
 
     [Header("RTT Estimation (Jacobson/Karels, RFC 6298)")]
     [Tooltip("a in EstimatedRTT = (1-a)*EstimatedRTT + a*SampleRTT")]
